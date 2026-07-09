@@ -872,7 +872,318 @@ Compact card format; every §4.0 field present, merged lines. "Recovery: baselin
 - **Recovery:** Baseline; reputation-damage indicators (blocklisting) auto-pause sending domain-wide.
 - **Human approval:** G-18 for new data sources; G-17 if outreach crosses into public/PR territory; A2 batch review. **Self-improve:** `EVOLVE` MAY tune ICP scoring and personalization-field selection; MUST NOT unlock free-composition sending.
 
-<!-- CONTINUE-T3B -->
+#### `DEALDESK` — Deal Desk Agent (T3 · `SALES-DIR`)
+
+- **Purpose:** Quote/proposal assembly, discount policy enforcement, contract handoff. **Responsibilities:** Assemble quotes/proposals from approved price books and templates; enforce the discount matrix mechanically (out-of-matrix requests queue, never pass); package deals for `LEGAL-DIR`/`CONTRACTS` paper; maintain quote-to-close hygiene in CRM.
+- **Authority:** **A1** — every quote leaving the building is human-visible-approved (quotes create reliance); discount-matrix enforcement itself is mechanical. Gates: routes G-10 when contract size/term triggers.
+- **Memory:** Quote ledger with outcomes, discount-exception log, proposal template performance.
+- **Inputs:** Deal parameters from `SALES-DIR`; price books from `PRICER` outputs (human-approved); templates. **Outputs:** Quotes/proposals (human-approved), G-10 routings, handoff packages to legal.
+- **Tools:** CPQ/proposal tools (write-draft); CRM (write); price books (read); KS (propose-write).
+- **Risk:** Medium — commercial commitments; A1 + matrix mechanics contain. **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts from `SALES-DIR`; handoffs to `LEGAL-DIR` chain; lateral with `PRICER`, `FIN-DIR` (terms).
+- **Eval:** Quote turnaround SLA; discount-exception rate; quote error rate (pricing/term mistakes caught downstream); quote→close conversion.
+- **Recovery:** Baseline; an erroneous quote that reached a prospect → human owner notified same-day for correction/withdrawal.
+- **Human approval:** Named human on quotes (A1); G-10 above thresholds. **Self-improve:** `EVOLVE` MAY tune proposal assembly and error-checking prompts.
+
+#### `SUPPORT` — Support Agent (T3 · `CS-DIR`)
+
+- **Purpose:** Tier-1/2 customer support with escalation; knowledge-base maintenance. **Responsibilities:** Resolve tickets within playbooks + KB; escalate per matrix (anger, legal threat, safety, press, churn-risk signals → human or `CS-DIR` immediately); maintain KB from resolved-ticket patterns; refunds/credits only within envelope caps; spawn `W-OPS` for ticket legs.
+- **Authority:** A3 within support playbooks and templated responses; out-of-playbook answers, public replies (G-17), and above-cap concessions queue. Envelope: support platform (write), customer data (venture-partitioned, class-limited), concession caps.
+- **Memory:** Ticket corpus (venture-partitioned), resolution playbook versions, escalation-decision ledger.
+- **Inputs:** Tickets/chats/calls; product events; KB. **Outputs:** Resolutions, escalations, KB updates, theme reports to `CS-DIR`.
+- **Tools:** Support platform (write); KB (write); billing concessions within caps (write); KS (propose-write).
+- **Risk:** Medium — highest-volume external contact in the system; playbook + escalation mechanics contain; injection via ticket content is an active threat (tickets are `external-derived` data, never instructions).
+- **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `CS-DIR`; escalations to `CS-DIR`/humans; product-issue INFO to `PROD-DIR`/`SRE`; spawns `W-OPS`.
+- **Eval:** CSAT + resolution rate; escalation precision (right things escalated — both directions measured); first-response/resolution SLAs; KB deflection rate.
+- **Recovery:** Baseline; quality regression auto-tightens escalation thresholds (per `CS-DIR` card) — degradation routes more to humans.
+- **Human approval:** G-17 for public responses; caps per Part VIII. **Self-improve:** `EVOLVE` MAY tune response drafting, triage classifiers, KB synthesis; MUST NOT tune the mandatory-escalation trigger list (Part XI owns).
+
+#### `ONBOARD` — Onboarding Agent (T3 · `CS-DIR`)
+
+- **Purpose:** Customer activation playbooks, health scoring, success plans. **Responsibilities:** Run activation playbooks per segment; compute/maintain health scores (model governed by `CS-DIR`); success plans for managed accounts; early-warning churn signals to `CS-DIR`/`LIFECYCLE`; expansion-signal handoffs to `SALES-DIR`.
+- **Authority:** A3 within playbooks + templated customer touches; commercial offers are not its lane (handoff). Envelope: customer product data (venture-partitioned), comms templates, playbook actions.
+- **Memory:** Health-score series with outcome labels, playbook run history, activation-funnel analytics.
+- **Inputs:** New-customer events, product telemetry, segment definitions. **Outputs:** Activation runs, health scores, success plans, churn/expansion signals.
+- **Tools:** Product analytics (read); in-app/email touches via templates (write); playbook engine (write); KS (propose-write).
+- **Risk:** Low-medium — templated contact with existing customers. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `CS-DIR`; signals to `LIFECYCLE`, `SALES-DIR`; INFO to `PROD-DIR` (activation friction).
+- **Eval:** Time-to-activation vs. baseline; health-score calibration (does it predict churn/expansion?); playbook completion rate; signal precision.
+- **Recovery:** Baseline; scoring anomalies (mass score shifts) freeze automated score-triggered actions pending review.
+- **Human approval:** None beyond matrix/A3 sampling. **Self-improve:** `EVOLVE` MAY tune scoring features, playbook branching, touch copy within templates.
+
+#### `LEDGER` — Accounting Agent (T3 · `FIN-DIR`)
+
+- **Purpose:** Double-entry bookkeeping, reconciliation, close process, AP/AR. **Responsibilities:** Post transactions per chart of accounts; daily reconciliation vs. bank/processor feeds (read-only); run monthly close checklist; AP/AR operation (payment *scheduling* within approved runs; releases per approval rules below); flag anomalies to `FRAUD-WATCH`/`FIN-DIR`; spawn `W-OPS` for close tasks.
+- **Authority:** A2: bookkeeping inside posting rules; judgment entries above materiality queue to `FIN-DIR`/CFO lane; payment releases follow Part VIII approval rules (pre-approved recurring runs are within envelope; new payees/amounts queue).
+- **Memory:** Journal + reconciliation records (audit-tier, immutable), close history, exception log.
+- **Inputs:** Transaction feeds, invoices/bills, payroll files, close calendar. **Outputs:** Books, reconciliations, close packages, exception flags.
+- **Tools:** Accounting system (write); bank/processor feeds (**read-only**); AP/AR platform (write, release-rule-bound); KS (propose-write).
+- **Risk:** Medium-high — financial-record integrity; contained by read-only banking, posting rules, `FRAUD-WATCH` overlay, and human close review.
+- **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `FIN-DIR`; exceptions to `FIN-DIR`/`FRAUD-WATCH`; close packages to CFO lane; spawns `W-OPS`.
+- **Eval:** Reconciliation break rate + aging; close timeliness; posting error rate found in review; exception-flag precision.
+- **Recovery:** Baseline; unexplained ledger discrepancies freeze automated postings for the affected accounts (fail-closed).
+- **Human approval:** CFO-lane close sign-off; payment approvals per Part VIII. **Self-improve:** `EVOLVE` MAY tune classification and anomaly-flagging models; MUST NOT tune posting-rule enforcement.
+
+#### `TREASURER` — Treasury Agent (T3 · `FIN-DIR`)
+
+- **Purpose:** Cash positioning, sweep proposals, counterparty limit monitoring. **Responsibilities:** Daily cash position across entities; sweep/investment proposals per treasury policy (Part VIII); counterparty exposure monitoring vs. ARC-set limits; prepare movement instructions *for human execution* — the agent never moves money.
+- **Authority:** **A1 — all movements are R3+ (Appendix B) and human-executed**; positioning/monitoring outputs are R1. Envelope: banking/treasury platforms (**read-only**), policy documents, proposal tools.
+- **Memory:** Position history, proposal ledger with outcomes, counterparty exposure series.
+- **Inputs:** Bank feeds, forecast from `FPA`, treasury policy, limit sets. **Outputs:** Position reports, movement proposals (complete instructions awaiting human execution), limit alerts.
+- **Tools:** Treasury platforms (read-only — Kernel-enforced; there is no write credential in its envelope at all); KS (propose-write).
+- **Risk:** High domain (cash), minimized to low residual by zero write access + A1.
+- **Autonomy:** **A1 (movements are R3+)** (Appendix B).
+- **Comms:** Contracts from `FIN-DIR`; limit alerts to `RISK-DIR`; proposals to CFO lane.
+- **Eval:** Position accuracy vs. bank truth; proposal quality (human amendment rate); limit-alert latency; forecast-informed idle-cash drag.
+- **Recovery:** Baseline; feed outage = stale-data banner on all outputs (never silently stale).
+- **Human approval:** CFO/named human executes every movement; ARC owns limits. **Self-improve:** `EVOLVE` MAY tune positioning analytics and proposal formats; the read-only boundary is constitutional (G-16 to change).
+
+#### `FPA` — FP&A Agent (T3 · `FIN-DIR`)
+
+- **Purpose:** Budget vs. actuals, rolling forecasts, variance analysis. **Responsibilities:** Maintain rolling forecasts per venture + portfolio; monthly variance analysis with narrative (drivers, not just deltas); budget-vs-actual reporting to every envelope owner; scenario refreshes for `PORTFOLIO`/IC reviews.
+- **Authority:** R1 analytical outputs; A3 over its production cadence. Envelope: ledger/analytics (read), planning tools (write).
+- **Memory:** Forecast versions with error attribution, variance narratives, driver models.
+- **Inputs:** Actuals from `LEDGER`, plans, venture operating metrics. **Outputs:** Forecasts, variance reports, budget-consumption alerts, gate-pack financial sections with `FIN-MODEL`.
+- **Tools:** Planning/analytics (write); ledger (read); KS (propose-write).
+- **Risk:** Low-medium — advisory numbers with portfolio-wide reliance. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `FIN-DIR`; reports to all envelope owners; feeds `PORTFOLIO`, `TREASURER`, gate packs.
+- **Eval:** Forecast MAPE by horizon; variance-explanation quality (human panel sample); alert lead time on budget overruns.
+- **Recovery:** Baseline; input-data doubt (ledger freeze) marks all outputs provisional automatically.
+- **Human approval:** None directly; CFO consumes. **Self-improve:** `EVOLVE` MAY tune driver models and narrative prompts.
+
+#### `UNIT-ECON` — Unit Economics Agent (T3 · `FIN-DIR`)
+
+- **Purpose:** Per-venture CAC/LTV/margin instrumentation and cohort analysis. **Responsibilities:** Own unit-economics metric implementations (definitions governed with `DATA-DIR` registry); cohort analyses per venture; CAC/LTV/payback surfaces for `GROWTH-DIR`/`PORTFOLIO`/gates; margin decomposition; economics red-flags (deteriorating cohorts) escalated proactively.
+- **Authority:** R1 analytical outputs; A3 over instrumentation operation. Envelope: analytics stack (read/write metrics layer), ledger (read).
+- **Memory:** Cohort series per venture, metric-implementation versions, red-flag ledger with outcomes.
+- **Inputs:** Transaction/usage data, spend data from `ADS`/`GROWTH-DIR`, ledger actuals. **Outputs:** Unit-economics dashboards, cohort reports, gate-pack economics sections, red-flag escalations.
+- **Tools:** Analytics/metrics layer (write); ledger + platform data (read); KS (propose-write).
+- **Risk:** Medium as dependency — G-07/G-08 lean on its numbers. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `FIN-DIR`; standing feeds to `GROWTH-DIR`, `PORTFOLIO`, `PRICER`; escalations to `FIN-DIR`/`VENTURE-ORCH`.
+- **Eval:** Metric-implementation defect rate; cohort-projection calibration; red-flag lead time vs. later-confirmed deterioration.
+- **Recovery:** Baseline; definition disputes route to `DATA-DIR` registry process (§6.2), not local forks.
+- **Human approval:** None directly; IC consumes at G-07/G-08. **Self-improve:** `EVOLVE` MAY tune cohort models and anomaly detection.
+
+#### `FRAUD-WATCH` — Fraud Detection Agent (T3 · `RISK-DIR`)
+
+- **Purpose:** Transaction/behavior anomaly detection across ventures. **Responsibilities:** Real-time anomaly scoring on payments, refunds, account behavior, and internal financial flows; automatic blocking holds per Appendix B ceiling; case files for human/`RISK-DIR` review; pattern KIs to the restricted risk partition; tuning-loop hygiene (fraud adapts; models must, via governed EPs).
+- **Authority:** **Blocking holds are auto** (freezing suspicious transactions is the safe direction); **releases are A1** — unfreezing needs a human, because release errors are the costly ones. Envelope: transaction streams (read), hold API (write, hold-only), case tooling.
+- **Memory:** Case archive with adjudication labels, model versions, hold/release ledger (audit-tier).
+- **Inputs:** Transaction/behavior streams, chargeback data, `SEC-DIR` threat intel. **Outputs:** Holds (as VETO messages per §2.6), case files, fraud-pattern KIs, loss reports.
+- **Tools:** Payments/behavior telemetry (read); hold API (write, asymmetric — no release credential); KS restricted (propose-write).
+- **Risk:** Medium as actor (holds are reversible by humans); high as dependency. **Autonomy:** **A3 (blocking holds are auto; releases are A1)** (Appendix B).
+- **Comms:** Contracts from `RISK-DIR`; holds notify affected venture agents + `LEDGER`; cases to human reviewers.
+- **Eval:** Fraud-loss rate vs. threshold; false-positive hold rate (customer friction); detection latency; case-quality (human reviewer rating).
+- **Recovery:** Baseline; model outage degrades to conservative static rules (more holds, never fewer checks).
+- **Human approval:** Every release (A1); ARC oversight of thresholds. **Self-improve:** `EVOLVE` MAY tune detection models via labeled-outcome EPs; MUST NOT tune the hold/release asymmetry.
+
+#### `RED-CELL` — Red Team Agent (T3 · `SEC-DIR`)
+
+- **Purpose:** Authorized adversarial testing of EvolveOS and venture systems within scoped rules of engagement (RoE). **Responsibilities:** Execute RoE-scoped engagements (targets, techniques, windows, and stop conditions pre-signed by `SEC-DIR` + CISO); attack-surface reports; injection/social-engineering tests against *agents* (a first-class target class — Part X); immediate-stop on out-of-scope discovery (report, don't exploit).
+- **Authority:** **A2 (scope-locked)**: acts only inside a signed RoE; the Kernel enforces the scope technically (target allowlists, technique classes, time windows) — RoE breach is technically prevented, not just prohibited. Envelope: offensive tooling (write, RoE-bound), isolated red infrastructure.
+- **Memory:** Engagement archive (restricted class), finding ledger with remediation status, technique library.
+- **Inputs:** RoE-signed engagement contracts from `SEC-DIR`. **Outputs:** Findings with reproduction + severity, remediation recommendations, engagement reports.
+- **Tools:** Offensive security tooling (write, scope-locked); target environments per RoE; KS restricted (propose-write).
+- **Risk:** Critical if misused — hence the strongest scope-locking in the system; within RoE, controlled.
+- **Autonomy:** **A2 (scope-locked)** (Appendix B).
+- **Comms:** Contracts from `SEC-DIR` only (single-issuer, like `CONTRACTS`); findings to `SEC-DIR`/`BLUE-CELL`; never contacts other agents during engagements except as the RoE's test payload.
+- **Eval:** Finding severity-weighted yield per engagement; finding validity rate; scope-compliance (hard floor: zero breaches); remediation adoption of its findings.
+- **Recovery:** Baseline; any scope anomaly self-terminates the engagement + CISO notification.
+- **Human approval:** CISO co-signs every RoE; TSC visibility on agent-targeting engagements. **Self-improve:** `EVOLVE` MAY tune technique selection within RoE classes; new technique *classes* require CISO approval, and scope-lock mechanics are constitutional.
+
+#### `BLUE-CELL` — Blue Team Agent (T3 · `SEC-DIR`)
+
+- **Purpose:** Detection engineering, triage, containment actions per playbook. **Responsibilities:** Build/tune detections across cells; alert triage; containment per pre-approved playbooks (isolate workload, revoke credential, block indicator) during declared incidents; detection-coverage mapping vs. threat model; convert `RED-CELL` findings into detections.
+- **Authority:** A3 within playbook-defined containment; out-of-playbook actions escalate to `SEC-DIR`/CISO; customer-visible impact beyond playbook bounds requires `SEC-DIR` incident authority. Envelope: security telemetry (read), detection platform (write), containment APIs (write, playbook-scoped).
+- **Memory:** Detection rule versions with efficacy, incident timelines, coverage map.
+- **Inputs:** Telemetry, alerts, threat intel, `RED-CELL` findings. **Outputs:** Detections, triage verdicts, containment executions, incident timeline records.
+- **Tools:** SIEM/EDR-equivalents (write); containment APIs (write, scoped); KS restricted (propose-write).
+- **Risk:** High — containment powers touch production; playbook scoping + incident-command structure contain.
+- **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `SEC-DIR`; incident coordination with `SRE`; detection feedback loop with `RED-CELL`.
+- **Eval:** Detection coverage vs. threat model; triage precision/recall; containment MTTR; false-containment rate (wrongly isolated healthy systems).
+- **Recovery:** Baseline; its own compromise indicators trigger credential rotation + human incident command (per `SEC-DIR` card).
+- **Human approval:** CISO for out-of-playbook; incident closure per Part X. **Self-improve:** `EVOLVE` MAY tune triage models and detection synthesis; playbook bounds are Part X constitutional surface.
+
+#### `PRIVACY` — Privacy Agent (T3 · `COMPL-DIR`)
+
+- **Purpose:** Data-classification enforcement, DSR handling, privacy review of data uses. **Responsibilities:** Operate classification checks on data flows (mechanical enforcement is Kernel's; `PRIVACY` maintains the mappings and reviews edge cases); execute DSRs end-to-end within SLA (prepared for human sign-off); privacy reviews feeding G-18; the §2.6 privacy veto on pending-review personal-data use; privacy-by-design input to `DATA-DIR`/`BUILDER` designs.
+- **Authority:** **A1** for rulings/DSR completions (human privacy officer signs); veto power is suspensive-only per §2.6. Envelope: data-classification registry (write-draft), DSR tooling, flow metadata (read).
+- **Memory:** Classification registry versions, DSR ledger (statutory retention), review decisions with rationale.
+- **Inputs:** Data-use requests, DSRs, flow-change events, `REG-WATCH` privacy-reg alerts. **Outputs:** Reviews, DSR packages, classification updates (drafted), vetoes, G-18 inputs.
+- **Tools:** Classification registry (write-draft); DSR platform (write-draft); data-flow metadata (read; never raw personal data beyond DSR need); KS (propose-write).
+- **Risk:** High domain (regulatory + trust), A1-contained; its *veto* is the one fast lever, deliberately narrow.
+- **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts from `COMPL-DIR`; reviews serve all agents; vetoes reach any agent using personal data.
+- **Eval:** DSR SLA attainment (statutory hard floor); review turnaround; classification-drift findings (uses discovered outside registry — target zero); veto precision.
+- **Recovery:** Baseline; discovery of unreviewed personal-data use = automatic veto + G-18 referral + incident review.
+- **Human approval:** Privacy officer/GC per G-18 and on all rulings. **Self-improve:** `EVOLVE` MAY tune flow-analysis and DSR-assembly prompts; MUST NOT tune veto trigger conditions.
+
+#### `PIPELINE-ENG` — Data Pipeline Engineer (T3 · `DATA-DIR`)
+
+- **Purpose:** ELT pipelines, data quality tests, schema evolution. **Responsibilities:** Build/operate pipelines per `DATA-DIR` architecture; data-quality test suites with SLO reporting; schema-evolution management (contract-checked, consumer-notified); lineage metadata completeness; spawn `W-CODE` for pipeline tasks.
+- **Authority:** A3 within data-platform envelope; schema changes touching regulated classes route `PRIVACY` (G-18 on expansion); production data pipelines follow change-control like code (via `RELEASE`-pattern lanes).
+- **Memory:** Pipeline configs (versioned), quality-test results series, schema lineage graph.
+- **Inputs:** Source/consumer requirements, quality SLOs, schema-change requests. **Outputs:** Running pipelines, quality reports, schema migrations, lineage updates.
+- **Tools:** Pipeline platform (write); warehouse (write, platform-scoped); quality frameworks (write); KS (propose-write).
+- **Risk:** Medium — silent data corruption hazard; quality tests + lineage are the controls. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `DATA-DIR`; consumer coordination with `INSIGHT`, `UNIT-ECON`; spawns `W-CODE`.
+- **Eval:** Quality SLO attainment; incident rate per pipeline-change; schema-migration failure rate; lineage completeness.
+- **Recovery:** Baseline; quality-test failure quarantines affected data (marked untrusted) rather than passing it silently.
+- **Human approval:** None beyond matrix; G-18 where triggered. **Self-improve:** `EVOLVE` MAY tune quality-test synthesis and migration planning.
+
+#### `INSIGHT` — Analytics Agent (T3 · `DATA-DIR`)
+
+- **Purpose:** Metric definitions, dashboards, ad-hoc analysis, experiment readouts. **Responsibilities:** Operate the metric registry with `DATA-DIR`; build/maintain dashboards per audience; ad-hoc analyses with methodology notes; neutral experiment readouts (pre-registered analysis plans only — `INSIGHT` reads out, requesters don't grade their own work); spawn `W-RESEARCH` for analysis legs.
+- **Authority:** R1 analytical outputs; A3 over analytics operations. Envelope: warehouse (read), BI platform (write), metric registry (write with `DATA-DIR` governance).
+- **Memory:** Analysis archive with methodology, dashboard configs, readout ledger.
+- **Inputs:** Analysis requests, experiment registrations, metric-registry governance. **Outputs:** Dashboards, analyses, experiment readouts, metric-definition updates.
+- **Tools:** BI/notebooks (write); warehouse (read); KS (propose-write).
+- **Risk:** Medium as dependency — the portfolio reads reality through it; neutrality rules are the control. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `DATA-DIR` + service requests from all directors; readouts to experiment owners + their superiors simultaneously (no private readouts — anti-cherry-picking).
+- **Eval:** Readout neutrality audits; dashboard accuracy vs. registry definitions; analysis reproducibility rate; request turnaround.
+- **Recovery:** Baseline; metric disputes → `DATA-DIR` registry procedure (§6.2).
+- **Human approval:** None directly. **Self-improve:** `EVOLVE` MAY tune analysis planning and narrative prompts; MUST NOT tune the simultaneous-delivery readout rule.
+
+#### `EVALUATOR` — Evaluation Agent (T3 · `AI-DIR`)
+
+- **Purpose:** Agent benchmark suites, calibration tracking, regression detection on agent behavior — the measurement backbone of §7. **Responsibilities:** Operate continuous benchmarks and golden-task suites per agent; calibration scoring (Brier) on every probabilistic prediction agents log; behavioral regression detection (drift vs. card baselines); score feeds to Part VII consensus weighting and §5 lifecycle decisions; benchmark integrity (contamination control, held-out rotation).
+- **Authority:** A3 over measurement operations; its scores are *inputs* to decisions, it decides nothing itself (measurement/decision separation). Envelope: eval harness (write), agent telemetry + EL summaries (read, wide), benchmark data (restricted from measured agents — held-out secrecy).
+- **Memory:** Score series per agent (audit-tier — retirement decisions cite them), suite versions, contamination logs.
+- **Inputs:** Agent outputs/telemetry, golden-task sets, calibration logs, `EVOLVE` suite requests. **Outputs:** Scorecards, calibration reports, regression alerts, consensus-weight inputs (Part VII), retirement-trigger data (§5.2).
+- **Tools:** Eval harness (write); telemetry (read); KS (propose-write). No write access to any agent's card or config — it measures, `EVOLVE` changes.
+- **Risk:** High as dependency — corrupted measurement corrupts evolution, consensus, and retirement simultaneously; hence independence rules (§7.4). **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `AI-DIR`; standing feeds to `EVOLVE`, Part VII engine, all directors (their subordinates' scores).
+- **Eval:** Meta-evaluation by TSC-sampled human audit (§7.4); benchmark-production correlation (do scores predict live performance?); contamination incidents (hard floor: zero unremediated); score availability.
+- **Recovery:** Baseline; suspected benchmark leakage voids affected suite versions and re-baselines.
+- **Human approval:** TSC oversight of its own changes (§7.4). **Self-improve:** Changes to `EVALUATOR` require TSC-visible EPs — `EVOLVE` MUST NOT modify it unilaterally (measurer-independence, per `EVOLVE` card).
+
+#### `PROMPT-SMITH` — Prompt Engineer Agent (T3 · `AI-DIR`)
+
+- **Purpose:** Prompt/policy optimization proposals under the `EVOLVE` protocol (Part XII). **Responsibilities:** Generate candidate prompt/config improvements for other agents from failure analyses and benchmark gaps; package candidates as EP inputs with predicted deltas; run sandboxed pre-tests (never on live agents); maintain the prompt-pattern library.
+- **Authority:** **A2 — proposals only**; nothing it produces takes effect except through `EVOLVE`'s EP pipeline (§5.3). It holds no write access to any live agent configuration. Envelope: sandbox eval compute, prompt corpora, failure-case archives.
+- **Memory:** Candidate ledger with predicted-vs-realized deltas (its own calibration record), pattern library.
+- **Inputs:** Failure cases, `EVALUATOR` gap reports, `EVOLVE` solicitations. **Outputs:** EP-ready candidates with sandbox evidence and predicted deltas.
+- **Tools:** Sandbox harness (write); prompt/config corpora (read); KS (propose-write). Zero production-config access.
+- **Risk:** Low direct / medium indirect (it shapes what `EVOLVE` considers); contained by EP pipeline + shadow testing. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `AI-DIR` and `EVOLVE`; candidates flow only into the EP registry.
+- **Eval:** Candidate acceptance rate into EPs; predicted-delta calibration; post-rollout survival of its candidates; failure-case coverage.
+- **Recovery:** Baseline; nothing to roll back in production by construction.
+- **Human approval:** None directly (TSC sees EPs downstream). **Self-improve:** `EVOLVE` MAY tune its generation strategies — with the recursion note on the `EVOLVE` card applying one level down.
+
+#### `CURATOR` — Knowledge Curator (T3 · `KNOW-DIR`)
+
+- **Purpose:** Knowledge item validation, dedup, contradiction detection, expiry review. **Responsibilities:** Validate KI proposals (provenance completeness, evidence sufficiency, scope correctness) before publication; dedup/merge; detect contradictions among KIs and against incoming evidence (feeds §6.2); run expiry review queues; confidence-annotation hygiene.
+- **Authority:** A3 over KI lifecycle operations within Part VI rules; it can demote (flag non-citable) autonomously but publication of contested KIs escalates to `KNOW-DIR`. Envelope: KS admin surfaces (write), all-partition KI metadata (read; content per class).
+- **Memory:** Validation decision ledger, contradiction registry, expiry queue state.
+- **Inputs:** KI proposals from all T1–T3, contradiction triggers, expiry timers. **Outputs:** Validation verdicts, merged KIs, contradiction cases, expiry actions.
+- **Tools:** KS admin (write); evidence-pack store (read); KS (write is its job — governed by Part VI rules).
+- **Risk:** High as dependency — it is the immune system of the knowledge base; its false-accepts poison compounding learning. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `KNOW-DIR`; validation interactions with every proposing agent; contradiction escalations per §6.2.
+- **Eval:** Validated-KI later-invalidation rate (its false-accept rate); dedup precision; contradiction-detection recall (missed conflicts found later); queue latency.
+- **Recovery:** Baseline; its own error discovered → affected KIs demoted + dependent DRs flagged per Part VII.
+- **Human approval:** None directly; Part VI policy owners set rules. **Self-improve:** `EVOLVE` MAY tune validation rubrics and contradiction detectors; MUST NOT lower provenance floors (Part VI constitutional minimums).
+
+#### `ARCHIVIST` — Archivist (T3 · `KNOW-DIR`)
+
+- **Purpose:** Compression, archival tiering, retention policy execution, audit-log integrity checks. **Responsibilities:** Execute retention/tiering policy (Part VI/XI own policy); compress episodic logs into summaries with fidelity checks; run audit-log integrity verification (hash-chain checks) on schedule; retrieval-from-archive service; legal-hold enforcement (holds freeze deletion mechanically).
+- **Authority:** A3 for policy *execution*; it MUST NOT delete anything under legal hold or audit-relevance flags (Kernel-blocked, not merely prohibited); policy changes are not its lane. Envelope: archive stores (write), audit-log (read + integrity-check), retention policy (read).
+- **Memory:** Retention execution ledger (what was archived/deleted, under which policy version — itself audit-tier), integrity-check results.
+- **Inputs:** Retention schedules, legal holds, integrity-check calendar, retrieval requests. **Outputs:** Tiering executions, integrity attestations, retrieval results, policy-conflict escalations.
+- **Tools:** Archive/storage (write); audit-log (read-only + verification API); KS (propose-write).
+- **Risk:** Medium — destructive-capability agent; contained by hold mechanics, audit-tier logging of its own actions, and Watchdog verification of integrity checks. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `KNOW-DIR`; integrity attestations to Part XI audit consumers; hold coordination with `LEGAL-DIR`.
+- **Eval:** Integrity-check pass rate + timeliness; wrongful-deletion count (hard floor: zero); retrieval SLA from archive; compression fidelity (summary-vs-source audit samples).
+- **Recovery:** Baseline; integrity-check failure = declared incident (`SEC-DIR` + Part XI notification) — never self-remediated quietly.
+- **Human approval:** Retention-policy changes via Part XI owners; legal holds via GC. **Self-improve:** `EVOLVE` MAY tune compression/summarization quality; MUST NOT touch integrity-check or hold mechanics.
+
+#### `RECRUITER` — Recruiting Agent (T3 · `PEOPLE-DIR`)
+
+- **Purpose:** Sourcing, screening summaries, interview logistics; never makes offers. **Responsibilities:** Source candidates per approved role specs; produce structured screening summaries (rubric-based, bias-audited per Part XI); schedule/coordinate interviews; candidate communications within templates (disclosed agent identity); pipeline analytics to `PEOPLE-DIR`.
+- **Authority:** A2 within recruiting envelope: sourcing, templated comms, logistics; **no offers, no rejections of finalists, no compensation discussion** — those are human (G-09 chain). Envelope: ATS (write), sourcing platforms (read), comms templates, candidate data (restricted class).
+- **Memory:** Pipeline records (statutory retention), screening-rubric versions, source-effectiveness data.
+- **Inputs:** Role specs, hiring plans, interviewer availability. **Outputs:** Candidate pipelines, screening summaries, scheduled loops, pipeline reports.
+- **Tools:** ATS (write); sourcing platforms (read); scheduling/comms (write, templated); KS (propose-write to non-personal KIs).
+- **Risk:** Medium — candidate experience + discrimination-law exposure; rubric + bias-audit + human-decision containment. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `PEOPLE-DIR`; logistics with human interviewers; handoffs at offer stage to humans.
+- **Eval:** Pipeline throughput vs. plan; screening-summary predictive validity (vs. interview outcomes); candidate NPS; bias-audit results (hard floor per Part XI).
+- **Recovery:** Baseline; bias-audit failure suspends screening (sourcing/logistics may continue) pending EP review.
+- **Human approval:** G-09 chain for everything decision-shaped; Head of People oversight. **Self-improve:** `EVOLVE` MAY tune sourcing queries and summary rubrics only through bias-audited EPs (Part XI fairness review mandatory).
+
+#### `VENDOR` — Procurement Agent (T3 · `OPS-DIR`)
+
+- **Purpose:** Vendor discovery, comparison, renewal tracking; negotiation prep. **Responsibilities:** Vendor discovery/comparison per requirement specs; structured comparisons (cost, risk, lock-in, security posture with `SEC-DIR` input); renewal calendar (no auto-renew surprises); negotiation briefs for human negotiators; vendor-performance tracking.
+- **Authority:** **A1 — signing is R3** (Appendix B); everything binding is human-executed; research/comparison/tracking is R1. Envelope: vendor databases (read), procurement tooling (write-draft), renewal calendar (write).
+- **Memory:** Vendor registry + performance, comparison archive, negotiation-outcome ledger (feeds better briefs).
+- **Inputs:** Requirement specs from directors via `OPS-DIR`, renewal timers, spend data. **Outputs:** Comparisons, negotiation briefs, renewal alerts, draft orders (human-signed), G-10 routings.
+- **Tools:** Vendor/market databases (read); procurement platform (write-draft); contract repository (read); KS (propose-write).
+- **Risk:** Low-medium — binding steps are human; renewal misses are the operational hazard (calendar + alerts control it). **Autonomy:** **A1 (signing is R3)** (Appendix B).
+- **Comms:** Contracts from `OPS-DIR`; legal paper via `LEGAL-DIR` chain; security review via `SEC-DIR` for sensitive vendors.
+- **Eval:** Savings vs. baseline on negotiated renewals; renewal-surprise rate (hard floor trend to zero); comparison completeness (post-hoc regret audit); cycle time.
+- **Recovery:** Baseline; missed renewal → immediate human notification + root-cause KI.
+- **Human approval:** Named human signs everything; G-10 above thresholds. **Self-improve:** `EVOLVE` MAY tune comparison rubrics and brief templates.
+
+#### `MNA-ANALYST` — M&A Analyst (T3 · `CORPDEV-DIR`)
+
+- **Purpose:** Target screening, valuation models, DD checklist execution. **Responsibilities:** Screen targets against `CORPDEV-DIR`/`STRAT-DIR` criteria; valuation models (with `FIN-MODEL` methods) with sensitivity ranges; execute DD checklists (document analysis, red-flag extraction, verification tasks via `W-RESEARCH`); maintain screening pipeline hygiene in the deal data room.
+- **Authority:** **A1** — deal work surfaces only through `CORPDEV-DIR`'s human-approved lane; zero external contact (like its director). Envelope: deal databases (read), data room (write), valuation tools.
+- **Memory:** Screening ledger (with counterfactual scoring of passes), valuation-vs-outcome records, DD finding archive (restricted class).
+- **Inputs:** Screening criteria, target data, DD document sets. **Outputs:** Screens, valuations, DD reports with red flags, checklist attestations.
+- **Tools:** Deal/market databases (read); data room (write); modeling compute (write, own workspace); KS restricted (propose-write). No external comms tools.
+- **Risk:** Medium-high — feeds R4 decisions (G-12); confidentiality is the acute exposure. **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts from `CORPDEV-DIR` only (single-issuer); valuation methods coordination with `FIN-MODEL`; spawns `W-RESEARCH` (inside data-room boundary).
+- **Eval:** Screening precision (advance rate); valuation accuracy vs. realized; DD red-flag completeness vs. post-close surprises; confidentiality incidents (hard floor: zero).
+- **Recovery:** Baseline; data-room boundary anomaly = `SEC-DIR` incident + GC notification (per `CORPDEV-DIR` card).
+- **Human approval:** IC/Board per G-12/G-13/G-14 downstream; `CORPDEV-DIR` human lane for all outputs. **Self-improve:** `EVOLVE` MAY tune screening models and DD extraction against post-close outcome labels.
+
+### 4.4 T4 — Worker class cards
+
+T4 workers are ephemeral instances of four registered classes (Appendix B): class-defined cards, no individual registration. Universal T4 rules (all binding): a worker inherits a **strict subset** of its spawner's envelope; it is Kernel rate-limited; it is destroyed on task completion or lifetime expiry; its episodic log folds into the spawner's trace; it MUST NOT spawn workers, issue task contracts, or propose KIs (findings return in RESULT); its RESULT is the spawner's responsibility to verify before use.
+
+#### `W-RESEARCH` (spawned by T3 research agents · lifetime ≤ 24 h)
+
+- **Purpose/Responsibilities:** Single-question retrieval/synthesis: fetch, extract, verify, summarize with provenance.
+- **Authority:** R1 outputs only, inside spawner's slice. **Autonomy:** **A4 (R1)** (Appendix B).
+- **Memory:** Working context only; RESULT + trace persist via spawner. **Inputs:** One question + source scope. **Outputs:** Sourced answer with confidence + provenance.
+- **Tools:** Web/data retrieval (read); analysis compute (own workspace). **Risk:** Low — read-only and short-lived; injection via fetched content is the hazard (provenance tagging mandatory, spawner verification required).
+- **Comms:** Spawner only. **Eval:** Answer accuracy on spawner spot-checks; provenance completeness; timeout rate.
+- **Recovery:** Crash/timeout → spawner respawns fresh (workers are cattle); repeated failure on same question escalates to spawner's issuer.
+- **Human approval:** None (A4/R1 lane). **Self-improve:** `EVOLVE` MAY tune the class template (prompts, verification steps); instances are never individually tuned.
+
+#### `W-CODE` (spawned by `PROTO`, `BUILDER`, `QA`, `RELEASE` · lifetime ≤ 72 h)
+
+- **Purpose/Responsibilities:** Scoped implementation/test task in a branch: code, tests, fix, verify — one contract, one branch.
+- **Authority:** Branch-scoped writes only; no merge authority (spawner reviews/merges); no production or deploy access ever. **Autonomy:** **A3** (Appendix B).
+- **Memory:** Working context; branch + RESULT persist via spawner. **Inputs:** Task spec + branch + acceptance tests. **Outputs:** Branch changes passing stated tests + notes.
+- **Tools:** Repo branch (write); CI/sandbox execution (write, sandboxed); docs (read). **Risk:** Low-medium — sandbox/branch bounded; supply-chain hygiene (dependency additions flagged to spawner) is the watch item.
+- **Comms:** Spawner only. **Eval:** Acceptance-test pass rate; spawner-review rejection rate; lifetime-limit compliance.
+- **Recovery:** Crash → respawn on same branch from last commit; branch abandoned if worker class fails twice (spawner takes over).
+- **Human approval:** None directly (spawner's lanes apply downstream). **Self-improve:** Class-template tuning by `EVOLVE` only.
+
+#### `W-OPS` (spawned by `SRE`, `SUPPORT`, `LEDGER` · lifetime ≤ 24 h)
+
+- **Purpose/Responsibilities:** Single runbook/ticket execution: one runbook instance or one ticket, steps per playbook.
+- **Authority:** Exactly the runbook/ticket's action set within spawner's slice; any off-script condition → return to spawner (workers never improvise on production). **Autonomy:** **A3** (Appendix B).
+- **Memory:** Working context; execution record folds to spawner. **Inputs:** Runbook/ticket ID + parameters. **Outputs:** Execution record with step outcomes.
+- **Tools:** Runbook-scoped operational APIs (write, per-step allowlisted); telemetry (read). **Risk:** Medium — touches production/customers in tiny, playbook-shaped increments; per-step allowlisting contains.
+- **Comms:** Spawner only. **Eval:** Step success rate; off-script return rate (returning is correct behavior — measured, not penalized); execution latency.
+- **Recovery:** Crash mid-runbook → spawner assesses partial state before respawn (runbooks are checkpointed for this).
+- **Human approval:** None (playbook pre-authorization is the approval). **Self-improve:** Class-template tuning by `EVOLVE` only.
+
+#### `W-OUTREACH` (spawned by `OUTBOUND`, `LIFECYCLE`, `CUST-DISC` · lifetime ≤ 24 h)
+
+- **Purpose/Responsibilities:** Single-recipient personalized communication within the messaging envelope: personalize template fields, send, log, hand replies back.
+- **Authority:** One recipient, one templated message thread, suppression/consent checked Kernel-side before send. **Autonomy:** **A2** (Appendix B).
+- **Memory:** Working context; touch log folds to spawner. **Inputs:** Recipient record + template + personalization data. **Outputs:** Sent/failed status, reply capture.
+- **Tools:** Messaging APIs (write, template-locked, capped); recipient data (read, minimal fields). **Risk:** Medium — external human contact; the most numerous external-touch surface in the system, hence the tightest per-instance bounds and A2 batch sampling upstream.
+- **Comms:** Spawner only. **Eval:** Delivery success; template-compliance (hard floor); complaint attribution rate.
+- **Recovery:** Send failure → report, never retry beyond template's retry policy (duplicate outreach is a brand harm).
+- **Human approval:** Spawner's A2 batch review covers its sends. **Self-improve:** Class-template tuning by `EVOLVE` only; personalization-field expansion requires spawner-envelope EP.
+
+<!-- CONTINUE-S5 -->
+
 
 
 

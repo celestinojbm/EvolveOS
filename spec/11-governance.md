@@ -33,7 +33,7 @@ The Board of the holding entity (§8) SHALL have five to seven directors:
 | 2–3 independent directors | No operational or financial ties beyond board compensation | Independent judgment on reserved matters, chair of ARC (§3.3) |
 | 1 AI-safety-qualified independent director | Demonstrable expertise in AI evaluation, alignment, or AI risk governance | See below |
 
-**[ASSUMPTION]** At least one independent director MUST be AI-safety-qualified (published work, prior AI-governance responsibility, or equivalent practitioner record). Rationale: the Board's hardest reserved matters (G-16 ratification, autonomy-ceiling policy) are not conventional business judgments; a board with no member able to interrogate an evaluation report or a calibration curve cannot exercise real oversight over them, and its G-16 role degrades into deference to management. This is an assumption because the market of such directors is thin; if the seat cannot be filled, the Board MUST retain an external AI-safety advisor with standing attendance rights until it can, and record this as a governance exception in the annual report (§13.2).
+**[ASSUMPTION]** At least one independent director MUST be AI-safety-qualified (published work, prior AI-governance responsibility, or equivalent practitioner record). Rationale: the Board's hardest reserved matters (G-16 ratification, autonomy-ceiling policy) are not conventional business judgments; a board with no member able to interrogate an evaluation report or a calibration curve cannot exercise real oversight over them, and its G-16 role degrades into deference to management. This is an assumption because the market of such directors is thin; if the seat cannot be filled, the Board MUST retain an external AI-safety advisor with standing attendance rights until it can, and record this as a governance exception in the annual report (§12.2).
 
 ### 2.2 Reserved matters
 
@@ -48,7 +48,7 @@ The Board's reserved-matters list **is exactly the set of R4 gates** in `appendi
 
 - The Board MUST meet at least quarterly; G-00 events affecting the whole system, and any G-12/G-13/G-14 matter, convene special sessions.
 - Standing board pack: portfolio state by pipeline stage (`05-business-creation-pipeline.md`), capital position (`08-finance.md`), risk register movements (`13-failure-analysis.md`), ARC oversight-quality metrics (§10.3), TSC evolution report (§3.4), all R4 DRs since the last session.
-- Every director has unrestricted read access to all DRs subject only to the exceptions of §13.1.
+- Every director has unrestricted read access to all DRs subject only to the exceptions of §12.1.
 
 ## 3. Committees
 
@@ -71,11 +71,11 @@ Committees are committees *of humans*. Agents present to committees; agents neve
 
 - **Composition:** chaired by an independent director; majority independent; CFO and GC attend without vote. The AI-safety-qualified director SHOULD sit on either ARC or TSC.
 - **Mandate:**
-  1. **DR audit:** directs the internal audit program of §14.1 — sampling DRs for evidence quality, envelope compliance, and gate-mechanics conformance.
+  1. **DR audit:** directs the internal audit program of §13.1 — sampling DRs for evidence quality, envelope compliance, and gate-mechanics conformance.
   2. **Limit oversight:** supervises `RISK-DIR` (which reports to `PRIME` + ARC per `appendix-b-agent-registry.md`); ratifies the risk-limit framework of `08-finance.md` and `13-failure-analysis.md`; receives limit-breach reports directly, not via management.
   3. **Oversight-quality monitoring:** owns the anti-rubber-stamping instrumentation of §10.3.
   4. **Whistleblower channel:** operates a reporting channel open to every employee, contractor, and — by design — every agent: any agent MAY file a protected report to ARC when instructed to act against the Constitution, and the Kernel MUST deliver such reports without interception by any orchestrator including `PRIME`. **WHY an agent-accessible channel:** the most likely witness to an instruction that circumvents a gate is the agent that received it; routing that signal around the management hierarchy is exactly what whistleblower channels are for.
-  5. **External audit relationship:** appoints and receives the external financial auditor (§14.2) and the third-party AI-governance auditor (§14.3).
+  5. **External audit relationship:** appoints and receives the external financial auditor (§13.2) and the third-party AI-governance auditor (§13.3).
 - **Cadence:** quarterly minimum, plus the quarterly risk-register review it chairs per `13-failure-analysis.md`.
 
 ### 3.4 Tech & Safety Committee (TSC)
@@ -106,7 +106,7 @@ Binding rules:
 
 1. Every agent added under Part IV lifecycle rules MUST be assigned an accountable officer before activation; an agent with no accountable officer is a Kernel-blocking configuration error.
 2. An accountable officer MAY veto any action of their agents at any time (this is a G-00-style stop within their domain; restart follows Appendix C stop asymmetry).
-3. Accountable officers MUST review their agents' post-hoc audit samples (§14.1) and sign the quarterly attestation that envelopes match granted authority.
+3. Accountable officers MUST review their agents' post-hoc audit samples (§13.1) and sign the quarterly attestation that envelopes match granted authority.
 
 ## 5. The human-mandatory list
 
@@ -250,7 +250,7 @@ The ARC SHALL monitor, per gate and per approver, with quarterly reporting to th
 | Metric | Signal of theater |
 |---|---|
 | **Approval latency distribution** | A distribution collapsed near zero — approvals faster than the DR could be read — is the primary red flag. (Slow tails are an operations problem; fast modes are a governance problem.) |
-| **Veto / modification / question rates** | An approver who never vetoes, never sends back for more evidence, and never asks a recorded question is presumptively rubber-stamping. **WHY presumption, not proof:** a perfect submission stream is possible in principle — but then sampled audit (§14.1) should independently confirm submission quality, and the presumption is rebutted by that evidence, not by assertion. |
+| **Veto / modification / question rates** | An approver who never vetoes, never sends back for more evidence, and never asks a recorded question is presumptively rubber-stamping. **WHY presumption, not proof:** a perfect submission stream is possible in principle — but then sampled audit (§13.1) should independently confirm submission quality, and the presumption is rebutted by that evidence, not by assertion. |
 | **Own-words acknowledgment quality** | Sampled by internal audit for genericness (template acknowledgments indicate non-review). |
 | **Outcome-conditioned calibration** | Approver-level approval/outcome records over time, mirroring the IC counterfactual review of §3.2. |
 
@@ -279,7 +279,7 @@ All DRs are visible to all EvolveOS humans **by default**. Exceptions, each requ
 
 ### 12.2 External
 
-**[ASSUMPTION]** EvolveOS SHALL publish an **annual governance report**: governance structure and changes, aggregate gate statistics (volumes, veto rates, SLA performance — not deal contents), autonomy-ceiling table summary, audit results summary (§14), ethics-screen statistics (refusals under §6.2), and incidents of Constitutional significance. Assumed rather than legally required today; adopted because (a) §6's trust thesis is only credible if externally verifiable, (b) it pre-positions the company for transparency mandates that AI regulation (§7.3) is likely to impose, and (c) publication is a commitment device — controls that must be reported on annually are harder to quietly weaken.
+**[ASSUMPTION]** EvolveOS SHALL publish an **annual governance report**: governance structure and changes, aggregate gate statistics (volumes, veto rates, SLA performance — not deal contents), autonomy-ceiling table summary, audit results summary (§13), ethics-screen statistics (refusals under §6.2), and incidents of Constitutional significance. Assumed rather than legally required today; adopted because (a) §6's trust thesis is only credible if externally verifiable, (b) it pre-positions the company for transparency mandates that AI regulation (§7.3) is likely to impose, and (c) publication is a commitment device — controls that must be reported on annually are harder to quietly weaken.
 
 ## 13. Auditing
 
