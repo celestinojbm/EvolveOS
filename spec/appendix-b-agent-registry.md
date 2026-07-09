@@ -1,6 +1,6 @@
 # Appendix B — Canonical Agent Registry
 
-**Status:** Draft v0.1 · **Rule:** this file is the single source of truth for agent IDs. Every part cites these IDs verbatim. Full agent cards (19 fields each) live in Part IV; this registry is the index. Adding, retiring, or re-tiering an agent follows the rules in Part IV §7–§9; changing an autonomy ceiling requires gate G-16.
+**Status:** Draft v0.1 · **Rule:** this file is the single source of truth for agent IDs. Every part cites these IDs verbatim. Full agent cards (the 14-field card template) live in Part IV; this registry is the index. Adding, retiring, or re-tiering an agent follows the lifecycle rules in Part IV §5; changing an autonomy ceiling requires gate G-16.
 
 **Tiers.** T1 = Orchestrators (portfolio-wide coordination). T2 = Domain Directors (own a function). T3 = Specialists (own a capability). T4 = Workers (ephemeral task executors spawned by T2/T3; class-defined, not individually registered). Scope: `P` = portfolio-level singleton; `V` = instantiated per venture (suffix `@V-yyyy-seq`); `P+V` = singleton with per-venture delegates.
 
@@ -94,7 +94,7 @@
 | `W-OPS` | `SRE`, `SUPPORT`, `LEDGER` | Single runbook/ticket execution | A3 | ≤ 24 h |
 | `W-OUTREACH` | `OUTBOUND`, `LIFECYCLE`, `CUST-DISC` | Single-recipient personalized communication within messaging envelope | A2 | ≤ 24 h |
 
-Worker instances inherit a strict subset of their spawner's envelope, are rate-limited by the Kernel, and are destroyed on task completion (Part IV §8).
+Worker instances inherit a strict subset of their spawner's envelope, are rate-limited by the Kernel, and are destroyed on task completion (Part IV §5).
 
 ## Non-agent actors referenced across the spec (for disambiguation)
 

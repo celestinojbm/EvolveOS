@@ -128,7 +128,7 @@ The KI is the atomic unit of validated knowledge (glossary). Canonical serializa
   "expires": "2028-06-02T00:00:00Z",
   "supersedes": "KI-2026-009911",
   "superseded_by": null,
-  "privacy_class": "P1",
+  "privacy_class": "PC-1",
   "embedding_refs": [
     {"index": "ki-main-v3", "model": "emb-2027a", "vector_id": "v-88213"}
   ]
@@ -170,16 +170,16 @@ Rules: agents SHOULD execute the highest-benchmarked applicable playbook version
 
 Customer memory is per-venture (cell-scoped; cross-venture sharing is **not** default — WHY: blast-radius and privacy: cross-venture customer data pooling is exactly the "data use outside approved classification/purpose" that **G-18** exists to gate).
 
-**Privacy classes** (assigned by `PRIVACY`, enforced by the Kernel on every retrieval):
+**Privacy classes PC-0…PC-3** (assigned by `PRIVACY`, enforced by the Kernel on every retrieval). Namespace note: privacy classes (personal-data sensitivity, this part) are distinct from the confidentiality data classes C0–C4 and the provenance labels P0–P4 defined in Part X (`10-security.md`) — the three taxonomies answer different questions (whose data is it / how secret is it / how trusted is its source) and all three can attach to one item:
 
 | Class | Content | Storage & retrieval rules |
 |---|---|---|
-| **P0 — Public** | Published info, public firmographics | Freely retrievable, portfolio-wide |
-| **P1 — Business-confidential** | Contract terms, usage aggregates, win/loss | Portfolio-wide for aggregated/derived KIs; raw records venture-scoped |
-| **P2 — Personal data** | Names, contact details, role-level person records, support transcripts | Venture-scoped; purpose-bound to collection purpose; any expansion of use → **G-18**; DSR deletion honored via crypto-erasure (§12) |
-| **P3 — Sensitive personal / regulated** | Payment data, health-adjacent, minors, special categories | Venture cell only, encrypted with per-class keys (`10-security.md`), retrieval whitelist per agent, every access logged as an L0 event; any new use → **G-18**, no exceptions |
+| **PC-0 — Public** | Published info, public firmographics | Freely retrievable, portfolio-wide |
+| **PC-1 — Business-confidential** | Contract terms, usage aggregates, win/loss | Portfolio-wide for aggregated/derived KIs; raw records venture-scoped |
+| **PC-2 — Personal data** | Names, contact details, role-level person records, support transcripts | Venture-scoped; purpose-bound to collection purpose; any expansion of use → **G-18**; DSR deletion honored via crypto-erasure (§12) |
+| **PC-3 — Sensitive personal / regulated** | Payment data, health-adjacent, minors, special categories | Venture cell only, encrypted with per-class keys (`10-security.md`), retrieval whitelist per agent, every access logged as an L0 event; any new use → **G-18**, no exceptions |
 
-Cross-venture customer *learning* is achieved legitimately by promoting **aggregated, de-identified** insights to P1 KIs (`PRIVACY` reviews the aggregation before promotion). Customer memory content: relationship history, health scores (`ONBOARD`), support history (`SUPPORT`), voice-of-customer insights (`CS-DIR`), consent and preference records (authoritative, drives `W-OUTREACH` envelopes).
+Cross-venture customer *learning* is achieved legitimately by promoting **aggregated, de-identified** insights to PC-1 KIs (`PRIVACY` reviews the aggregation before promotion). Customer memory content: relationship history, health scores (`ONBOARD`), support history (`SUPPORT`), voice-of-customer insights (`CS-DIR`), consent and preference records (authoritative, drives `W-OUTREACH` envelopes).
 
 ## 9. Market memory
 
@@ -207,7 +207,7 @@ WHY failure data is the moat — stated as a binding design premise: success dat
 
 - L0 events are **hash-chained** (each event includes the hash of its predecessor per partition) with periodic **anchoring**: partition head hashes are cross-signed into the portfolio root chain **[ASSUMPTION]** hourly, making tampering detectable at ≤ 1h granularity. `ARCHIVIST` runs continuous integrity verification; a chain break is a security incident (G-00-eligible, `SEC-DIR` incident command).
 - Write path: only the Kernel writes L0 (agents emit; Kernel signs, sequences, appends). No agent — including `ARCHIVIST` — has delete or rewrite capability; retention transitions (§13.5) move ciphertext between tiers without altering the chain.
-- **Retention [ASSUMPTION]:** decision-relevant events (DRs, gate events, approvals, envelope changes): ≥ 10 years or longer per jurisdiction. Operational telemetry: 3 years full, then compressed summaries (with the §17 pointer guarantee). Financial events: per statutory requirement, jurisdiction-max. Personal data inside events: subject to DSR erasure via **crypto-erasure** — P2/P3 payloads are envelope-encrypted per data subject; erasure destroys the key, leaving the chain intact with an unreadable payload and an erasure event recorded. WHY crypto-erasure: it is the only construction that satisfies both immutability (audit) and erasure (privacy law) simultaneously.
+- **Retention [ASSUMPTION]:** decision-relevant events (DRs, gate events, approvals, envelope changes): ≥ 10 years or longer per jurisdiction. Operational telemetry: 3 years full, then compressed summaries (with the §17 pointer guarantee). Financial events: per statutory requirement, jurisdiction-max. Personal data inside events: subject to DSR erasure via **crypto-erasure** — PC-2/PC-3 payloads are envelope-encrypted per data subject; erasure destroys the key, leaving the chain intact with an unreadable payload and an erasure event recorded. WHY crypto-erasure: it is the only construction that satisfies both immutability (audit) and erasure (privacy law) simultaneously.
 
 ## 13. Storage layer
 
@@ -250,12 +250,12 @@ Fusion ranks by (channel-normalized relevance × confidence × TTL-adjusted fres
 
 | Tier | Default scope | Depth | Notes |
 |---|---|---|---|
-| T1 | Portfolio-wide, all P0/P1 | High (broad fan-out, 2-hop graph) | Orchestration needs cross-venture pattern access |
+| T1 | Portfolio-wide, all PC-0/PC-1 | High (broad fan-out, 2-hop graph) | Orchestration needs cross-venture pattern access |
 | T2 | Own domain portfolio-wide + own venture full | Medium-high | Domain directors get deep domain slices |
 | T3 | Own venture + domain-relevant portfolio KIs | Medium | Specialists get precision, not breadth |
 | T4 | Task-scoped whitelist inherited from spawner's contract | Low, capped | Workers retrieve only what the contract scopes — cost and exfiltration control |
 
-P2/P3 access is orthogonal to tier: whitelist per agent per purpose (§8), Kernel-enforced.
+PC-2/PC-3 access is orthogonal to tier: whitelist per agent per purpose (§8), Kernel-enforced.
 
 ### 14.3 Interfaces
 - **Decision engine (Part VII):** gate evaluations issue *evidence-pack queries* — retrieval with a completeness contract (the DR schema requires that every material claim resolve to KI/provenance refs). The retrieval service returns a machine-checkable evidence pack; missing-evidence gaps are listed explicitly so the DR shows what was *not* known.
