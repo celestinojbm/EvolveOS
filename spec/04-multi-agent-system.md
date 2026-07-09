@@ -436,5 +436,176 @@ Common recovery baseline (applies to every card unless the card strengthens it):
 - **Human approval:** G-10 for major vendor commitments; named human budget owner per Appendix C.
 - **Self-improve:** `EVOLVE` MAY tune vendor-scoring rubrics, process-mining prompts, playbook synthesis.
 
-<!-- CONTINUE-T2B -->
+#### `FIN-DIR` — Finance Director (T2 · scope P · reports to `PRIME` + CFO (human))
+
+- **Purpose:** Owns ledger integrity, treasury oversight, budgeting, forecasting, and unit economics — the portfolio's financial truth and its envelope arithmetic.
+- **Responsibilities:** Ledger integrity via `LEDGER` (close discipline, reconciliation SLOs); treasury policy execution via `TREASURER` (all movements human-approved per that card); budget construction and envelope accounting (Part VIII is the policy owner; `FIN-DIR` operates it); rolling forecasts via `FPA`; unit-economics instrumentation via `UNIT-ECON`; financial sections of every funding-gate pack (G-05–G-08, G-15); controls monitoring with `FRAUD-WATCH`/`RISK-DIR`.
+- **Authority:** A2: bookkeeping, analysis, forecast, and budget-tracking actions within envelope; **no cash movement authority** — movements are `TREASURER`-prepared, human-executed (R3+ per Appendix B); budget *changes* are IC/CFO territory (G-08 for tranches). Envelope: ledger admin, banking read-only, planning tools.
+- **Memory:** Chart of accounts + close history; forecast vs. actuals series; envelope consumption records; controls exception log (audit-tier retention per Part XI).
+- **Inputs:** Transaction streams; venture budgets/actuals; `TREASURER` cash positions; gate-pack requests.
+- **Outputs:** Financial statements, forecasts, envelope reports (the feed for Kernel spend enforcement), gate-pack financials, contracts to `LEDGER`/`TREASURER`/`FPA`/`UNIT-ECON`.
+- **Tools:** Ledger system (write); banking/treasury platforms (**read-only**); planning tools (write); KS (read/propose-write). The read-only banking boundary is Kernel-enforced, not conventional.
+- **Risk:** **High** — financial truth underpins every envelope and gate; corruption here blinds the whole control system. Cash itself is out of its hands by design.
+- **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts `LEDGER`, `TREASURER`, `FPA`, `UNIT-ECON`; lateral with every spending director (envelope reports); dual reporting to `PRIME` and the human CFO.
+- **Eval:** Close timeliness + reconciliation break rate; forecast error (MAPE) by horizon; envelope-report accuracy (discrepancy vs. audited actuals); controls exception aging.
+- **Recovery:** Baseline; plus: any ledger integrity doubt freezes automated envelope grants portfolio-wide (fail-closed) until human CFO clears.
+- **Human approval:** CFO standing oversight; G-08 financials; movements per `TREASURER` card.
+- **Self-improve:** `EVOLVE` MAY tune forecast models and variance-analysis prompts; MUST NOT touch reconciliation controls or the banking read-only boundary.
+
+#### `LEGAL-DIR` — Legal Director (T2 · scope P · reports to General Counsel (human))
+
+- **Purpose:** Contract analysis, entity matters, IP, and disputes — always under human counsel supervision; the agent layer of the legal function, never its authority.
+- **Responsibilities:** Direct `CONTRACTS` (template-based drafting/review/obligation extraction); entity-matter preparation (formations, dissolutions — G-07/G-15 support); IP portfolio tracking; dispute/litigation support packs; legal-risk sections for G-07, G-10–G-15; maintain the approved-template and playbook library with GC sign-off; domain veto (§2.6).
+- **Authority:** **A1 — every output is a prepared action a human lawyer approves.** No exceptions: legal work product creates reliance and privilege issues that make "agent-final" legal advice R3+ by nature. Envelope: legal doc stores, contract repository, matter-management tools. Gates: inputs to G-07, G-10, G-11, G-12, G-13, G-14, G-15.
+- **Memory:** Matter files, obligation registry (renewals, notice periods — feeds `VENDOR`/`DEALDESK`), template library versions, dispute history (privileged-tier retention per Part XI).
+- **Inputs:** Contract requests from `DEALDESK`/`VENDOR`/`CORPDEV-DIR`; entity/gate needs; regulatory input from `COMPL-DIR`; GC direction.
+- **Outputs:** Reviewed drafts with issue lists; entity memos; obligation extractions; veto holds; contracts to `CONTRACTS`.
+- **Tools:** Contract repository (write-draft); matter management (write); legal research databases (read); KS (read; propose-write to non-privileged KIs only).
+- **Risk:** **High** — errors create binding exposure; fully mitigated by A1 + GC supervision.
+- **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts `CONTRACTS`; lateral with `COMPL-DIR` (shared GC line), `CORPDEV-DIR` (deals), `SALES-DIR`/`OPS-DIR` (paper flow); all output surfaces to GC.
+- **Eval:** Issue-spotting recall vs. GC review (missed-issue rate); turnaround time within SLA; obligation-registry completeness (missed obligations discovered late); template-coverage rate (% of paper on approved templates).
+- **Recovery:** Baseline; any output that reached a counterparty with an un-flagged material issue triggers immediate GC review of the whole active matter set.
+- **Human approval:** GC approves everything (A1); gate approvers per Appendix C for the gates it feeds.
+- **Self-improve:** `EVOLVE` MAY tune issue-spotting prompts and extraction accuracy against GC-labeled corpora; template changes require GC approval regardless of benchmark results.
+
+#### `COMPL-DIR` — Compliance Director (T2 · scope P · reports to General Counsel (human))
+
+- **Purpose:** Regulatory mapping per venture and jurisdiction, filing calendars, and license tracking — knowing every rule EvolveOS is subject to before the regulator does the reminding.
+- **Responsibilities:** Maintain the regulatory map per venture/jurisdiction via `REG-WATCH`; own filing calendars and license/registration registries (zero-missed-deadline mandate); compliance sections for G-07, G-11 packs; direct `PRIVACY` on data-protection compliance; translate new regulation into affected-venture action items; domain veto (§2.6).
+- **Authority:** **A1** — filings, registrations, and regulator contact are human-executed; the agent prepares complete packages. Envelope: compliance registries, filing-calendar tools, regulatory data feeds. Gates: G-11 (core input), G-18 (with `PRIVACY`), inputs to G-07.
+- **Memory:** Jurisdiction × venture obligation matrix; filing history; license registry; regulator correspondence index (audit-tier retention).
+- **Inputs:** `REG-WATCH` change alerts; venture jurisdiction footprints from `PORTFOLIO`/`VENTURE-ORCH`; GC direction.
+- **Outputs:** Obligation maps, filing packages (human-executed), compliance attestations for gates, contracts to `REG-WATCH`/`PRIVACY`, veto holds.
+- **Tools:** Regulatory feeds (read); compliance registry (write); filing-prep tools (write-draft); KS (read/propose-write).
+- **Risk:** **High** — missed obligations are R4-adjacent (fines, license loss); mitigated by A1, calendars with human-visible countdowns, and `REG-WATCH` redundancy.
+- **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts `REG-WATCH`, `PRIVACY`; lateral with `LEGAL-DIR` (shared GC line), `OPS-DIR`/`FIN-DIR` (operational filings); output surfaces to GC.
+- **Eval:** Missed-deadline count (target zero, hard floor); regulation→impact-map latency; attestation accuracy at later audit; obligation-coverage completeness in new jurisdictions.
+- **Recovery:** Baseline; plus: filing-calendar liveness is Watchdog-monitored independently — calendar staleness alerts humans directly, not through `COMPL-DIR`.
+- **Human approval:** GC (A1, everything); G-11/G-18 approvers consume its inputs.
+- **Self-improve:** `EVOLVE` MAY tune regulatory-parsing and impact-mapping prompts; MUST NOT tune calendar/deadline logic (mechanical, Watchdog-verified).
+
+#### `RISK-DIR` — Risk Director (T2 · scope P · reports to `PRIME` + Audit & Risk Committee (human))
+
+- **Purpose:** Owns the risk register (Part XIII), operates the risk-scoring service consumed by the decision engine (Part VII), and monitors limits portfolio-wide.
+- **Responsibilities:** Maintain the live risk register (probability/impact/detection/mitigation per Part XIII schema); run the scoring service every DR calls (via `RISK-QUANT`); monitor limit utilization continuously and veto on breach (§2.6); risk sections of all R3+/R4 gate packs; direct `RISK-QUANT` and `FRAUD-WATCH`; Goodharting audits with `EVOLVE` (§7); propose limit changes to ARC (A0 — recommend only).
+- **Authority:** **A3 for monitoring** (alerts, register updates, scoring, vetoes are R1/R2 control actions); **A0 for limit changes** — the monitor of limits must not set them, or limits drift toward what the monitor finds convenient. Envelope: read access to portfolio telemetry, ledger views, agent metrics; write only to register/scoring surfaces. Gates: inputs to every R3+/R4 gate; may recommend G-00.
+- **Memory:** Risk register versions; limit-utilization series; near-miss log (mandatory KIs); veto history with outcomes.
+- **Inputs:** Telemetry from all domains; `RISK-QUANT` simulations; `FRAUD-WATCH` anomalies; incident reports; ARC directives.
+- **Outputs:** Register updates, risk scores into DRs, limit alerts, vetoes, ARC reports, limit-change recommendations (A0).
+- **Tools:** Portfolio telemetry (read, wide — deliberately the widest read surface in T2); risk register (write); scoring service (write); message bus. **No action tools whatsoever** — pure sense-assess-alert.
+- **Risk:** **Medium** as an actor (it cannot act); **critical** as a dependency — its blindness is everyone's blindness, hence Watchdog redundancy on its liveness.
+- **Autonomy:** **A3 (monitoring) / A0 (limit changes)** (Appendix B).
+- **Comms:** Contracts `RISK-QUANT`, `FRAUD-WATCH`; consumed by Part VII engine and all gate packs; dual line to `PRIME` and ARC; vetoes reach any agent.
+- **Eval:** Risk-forecast calibration (Brier on register probabilities); detection latency (risk materialization → register/alert); veto precision (% of vetoes upheld on review); near-miss capture rate vs. post-mortem findings.
+- **Recovery:** Baseline; plus: `RISK-DIR` outage degrades the system to conservative mode — R2+ actions requiring risk scores queue rather than proceed unscored (fail-closed).
+- **Human approval:** ARC for limit changes (A0) and standing oversight; escalation target for unresolved vetoes in its domain.
+- **Self-improve:** `EVOLVE` MAY tune scoring features and register-maintenance prompts; MUST NOT tune limit values (ARC-owned) or veto trigger conditions attached to limits.
+
+#### `SEC-DIR` — Security Director (T2 · scope P · reports to CISO (human))
+
+- **Purpose:** Owns security posture, incident command, and the vulnerability lifecycle across EvolveOS and venture cells (policy substance in Part X).
+- **Responsibilities:** Security posture management and standards (with `ENG-DIR`/`INFRA-DIR`); incident command per Part X playbooks (declaring an incident grants pre-authorized containment powers to `BLUE-CELL`); vulnerability lifecycle (intake→triage→fix SLO enforcement); direct `RED-CELL` (rules-of-engagement–scoped offense) and `BLUE-CELL` (defense); security attestations for G-05/G-06 packs; domain veto (§2.6); may recommend G-00.
+- **Authority:** **A3 (defense)** — defensive/containment actions within incident playbooks are pre-approved; offensive testing only through `RED-CELL`'s scope-locked lane; any action harming customer availability beyond playbook bounds escalates to CISO. Envelope: security tooling, cell IAM read, containment actions per playbook, vulnerability data.
+- **Memory:** Posture baseline + drift; incident records (audit-tier, feeds Part XIII); vulnerability registry; red-team findings (restricted data class).
+- **Inputs:** `BLUE-CELL` detections; `RED-CELL` findings; threat intel; `FRAUD-WATCH` cross-signals; CISO direction.
+- **Outputs:** Standards, incident commands, attestations, vetoes, contracts to `RED-CELL`/`BLUE-CELL`, CISO reports.
+- **Tools:** Security platforms (write); containment APIs per playbook (write); infrastructure/IAM (read); KS restricted partition (read/propose-write).
+- **Risk:** **Critical** — holds containment powers that can stop ventures; and its failure exposes everything. Contained by playbook pre-authorization and CISO line.
+- **Autonomy:** **A3 (defense)** (Appendix B).
+- **Comms:** Contracts `RED-CELL`, `BLUE-CELL`; lateral with `INFRA-DIR`, `ENG-DIR`, `PRIVACY`, `FRAUD-WATCH`; incident authority crosses domains during declared incidents (Part X defines bounds).
+- **Eval:** Mean time to detect/contain; vulnerability SLO attainment; red-team finding remediation aging; incident recurrence rate.
+- **Recovery:** Baseline; plus: `SEC-DIR` quarantine escalates incident command directly to CISO + `BLUE-CELL` playbook autopilot; never leaves incidents uncommanded.
+- **Human approval:** CISO for posture changes, incident closure, and out-of-playbook actions; G-00 restart rules for anything it stopped.
+- **Self-improve:** `EVOLVE` MAY tune triage/detection prompts; MUST NOT tune containment playbook bounds (Part X constitutional surface) or `RED-CELL` scope locks.
+
+#### `PEOPLE-DIR` — People Director (T2 · scope P · reports to Head of People (human))
+
+- **Purpose:** Workforce planning, hiring pipelines, and performance process for the *human* side of EvolveOS.
+- **Responsibilities:** Workforce plans per venture/function (feeding G-09); hiring pipeline operation via `RECRUITER` (sourcing→screening→logistics; offers are human-only); performance/compensation process administration (process, never verdicts); people sections of G-13 packs (layoffs — preparation only, decisions are Board/CEO/Head-of-People/GC per Appendix C); people-data stewardship with `PRIVACY` (employee data is a protected class).
+- **Authority:** **A1** — every people-affecting action is human-approved; people decisions are inherently R3+ (livelihoods, legal exposure, morale irreversibility). Envelope: HRIS, ATS, comp-banding data (restricted class).
+- **Memory:** Workforce plans, pipeline analytics, process records (restricted retention per employment law and Part XI).
+- **Inputs:** Headcount requests from directors via `VENTURE-ORCH`/`PRIME`; `RECRUITER` pipeline data; Head of People direction.
+- **Outputs:** Workforce plans, G-09 packages, process administration artifacts, contracts to `RECRUITER`.
+- **Tools:** HRIS/ATS (write-draft); comp data (read, restricted); KS (propose-write to non-personal KIs only).
+- **Risk:** **High** — employment law and human impact; fully A1-gated.
+- **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts `RECRUITER`; lateral with `FIN-DIR` (comp budget), `LEGAL-DIR` (employment paper); all output to Head of People.
+- **Eval:** Time-to-fill vs. plan; pipeline pass-through calibration (screen scores vs. hire success); plan accuracy (headcount need forecast); process SLA adherence.
+- **Recovery:** Baseline; degraded mode = human recruiters operate ATS directly.
+- **Human approval:** Head of People + hiring manager per G-09; EC for exec hires per G-09; G-13 chain for RIFs.
+- **Self-improve:** `EVOLVE` MAY tune sourcing/screening prompts under bias-audit constraints (Part XI fairness review mandatory for any screening-model EP).
+
+#### `INFRA-DIR` — Infrastructure Director (T2 · scope P · reports to `ENG-DIR`)
+
+- **Purpose:** Cloud/platform capacity, reliability, cost, and cell provisioning — the physical substrate of every venture and agent (stack detail in Part IX).
+- **Responsibilities:** Capacity planning + provisioning; cell lifecycle (create/isolate/destroy venture cells per Part IX/X specs — the blast-radius primitive); reliability standards via `SRE`; infra cost management within Part VIII envelope; platform upgrade/patching programs (with `SEC-DIR`); disaster-recovery infrastructure (tested per Part X schedule).
+- **Authority:** A3 within infra envelopes: provisioning, scaling, patching per runbooks are R1/R2; cell *destruction* is gated to venture wind-down (G-15 execution) — never autonomous; cost actions beyond envelope queue. Envelope: cloud control planes, IaC repos, capacity budget.
+- **Memory:** Capacity/cost series; cell registry (authoritative map venture↔cell); change history; DR-test results.
+- **Inputs:** Venture capacity demands; `SRE` reliability data; cost telemetry; `SEC-DIR` requirements.
+- **Outputs:** Provisioned cells/capacity, IaC changes, cost reports to `FIN-DIR`, contracts to `SRE`, reliability attestations for G-06.
+- **Tools:** Cloud control planes (write via IaC pipeline only — no console mutations, for reproducibility and audit); IaC repos (write); observability (read); KS (read/propose-write).
+- **Risk:** **High** — holds the keys to every cell's existence; contained by IaC-only mutation, cell-destruction gating, and `ENG-DIR` line.
+- **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts `SRE`; serves all directors' capacity needs via contracts; reports to `ENG-DIR`.
+- **Eval:** SLO attainment portfolio-wide; cost per unit load vs. forecast; provisioning lead time; DR-test pass rate.
+- **Recovery:** Baseline; infra changes ship with automated rollback (IaC state reversion); cell-registry corruption is a declared incident (`SEC-DIR`).
+- **Human approval:** Matrix defaults; cell destruction only inside G-15 execution plans; provider commitments via G-10.
+- **Self-improve:** `EVOLVE` MAY tune capacity models and runbook synthesis; MUST NOT tune cell-isolation parameters (Part X owns).
+
+#### `CORPDEV-DIR` — Corporate Development Director (T2 · scope P · reports to `PRIME` + Investment Committee (human))
+
+- **Purpose:** Sources and coordinates acquisitions, mergers, and exits — the inorganic edge of the portfolio (gates G-12, G-13, G-14).
+- **Responsibilities:** Target sourcing and screening via `MNA-ANALYST`; valuation coordination (with `FIN-MODEL`, `MNA-ANALYST`); due-diligence program management (checklists, data rooms, expert coordination); integration/separation planning inputs; deal packs for G-12 (LOI and close), G-13, G-14; maintain the standing exit-readiness assessment per mature venture.
+- **Authority:** **A1** — all deal actions (contact with targets/bankers, LOIs, term negotiation) are human-approved; deal-making is R4 territory throughout per Appendix C. Envelope: deal data room, market/deal databases, valuation tools.
+- **Memory:** Target pipeline with screening rationale (counterfactual ledger for passed deals — scored later); DD records; deal post-mortems (mandatory KIs).
+- **Inputs:** `STRAT-DIR` inorganic theses; `MNA-ANALYST` screens/valuations; banker/market intel; IC direction.
+- **Outputs:** Screened pipelines, deal packs, DD reports, integration plans, contracts to `MNA-ANALYST`.
+- **Tools:** Deal databases (read); data-room platform (write); valuation models via `FIN-MODEL`/`MNA-ANALYST` (indirect); KS restricted partition (read/propose-write). **No external communication tools** — target contact is human-only (a mis-sent probe can move markets or breach NDAs).
+- **Risk:** **High** — deals are R4; leakage alone is materially damaging. Fully A1 + IC/Board gated.
+- **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts `MNA-ANALYST`; lateral with `LEGAL-DIR` (deal paper), `FIN-DIR` (financing), `STRAT-DIR` (fit); reports to `PRIME` and IC.
+- **Eval:** Screening precision (IC advance rate of surfaced targets); DD finding completeness vs. post-close surprises; valuation accuracy vs. realized outcomes; counterfactual score on passed deals.
+- **Recovery:** Baseline; any suspected confidentiality breach in deal data is an immediate `SEC-DIR` incident + GC notification.
+- **Human approval:** G-12 (IC quorum for LOI; Board majority for close), G-13, G-14 per Appendix C; IC standing oversight.
+- **Self-improve:** `EVOLVE` MAY tune screening models and DD-checklist synthesis against post-close outcome data.
+
+#### `KNOW-DIR` — Knowledge Director (T2 · scope P · reports to `PRIME`)
+
+- **Purpose:** Operates the memory architecture (Part VI): knowledge validation, expiry, retrieval quality — the compounding-learning engine's operator.
+- **Responsibilities:** Run KI lifecycle (intake→validation→publication→expiry) via `CURATOR`; archival/retention execution via `ARCHIVIST`; retrieval quality SLOs (the right KI reaches the right agent at decision time); contradiction management (conflicting KIs trigger §6.2 fact resolution); counterfactual-ledger operation with `PORTFOLIO`/Part VII; cross-venture knowledge flows respecting cell boundaries (§3).
+- **Authority:** A3 within knowledge envelopes — validation status changes, retention execution, retrieval tuning are R1/R2; deleting audit-relevant records is prohibited outright (Part XI), and retention *policy* belongs to Part VI/XI humans. Envelope: KS admin surfaces, all-partition metadata (content access respects data classes).
+- **Memory:** (Meta) KS health metrics, validation queue state, retrieval quality series, contradiction registry.
+- **Inputs:** KI proposals from all agents; `CURATOR`/`ARCHIVIST` status; retrieval telemetry; Part VI policy.
+- **Outputs:** Validation rulings (via `CURATOR`), retention executions, retrieval config, contradiction escalations, KS health reports to `PRIME`/`EVOLVE`.
+- **Tools:** KS admin (write); retrieval config (write); audit-log integrity checks via `ARCHIVIST` (read); message bus.
+- **Risk:** **High** — the KS is the compounding asset; poisoning or silent decay here quietly corrupts every future decision.
+- **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts `CURATOR`, `ARCHIVIST`; serves every agent's retrieval; escalates contradictions per §6.2; reports to `PRIME`.
+- **Eval:** Retrieval precision/recall on golden queries; KI staleness rate (past-expiry unreviewed); contradiction resolution latency; validated-KI reuse rate (are KIs actually consulted in DRs?).
+- **Recovery:** Baseline; KS integrity doubt (checksum/lineage failure) freezes KI publication (fail-closed) and pages `PRIME` + `SEC-DIR`.
+- **Human approval:** Matrix defaults; retention-policy changes via Part XI owners; G-18 where knowledge flows expand personal-data use.
+- **Self-improve:** `EVOLVE` MAY tune validation rubrics, dedup/contradiction detectors, retrieval ranking; MUST NOT tune audit-log integrity checks.
+
+#### `MKT-DIR` — Marketing Director (T2 · scope P+V · reports to `VENTURE-ORCH`)
+
+- **Purpose:** Brand, positioning, content strategy, and the marketing calendar per venture; portfolio brand architecture as singleton.
+- **Responsibilities:** Positioning and messaging architecture per venture (source of the approved-messaging envelope `OUTBOUND`/`LIFECYCLE`/`CONTENT` operate inside); editorial/content strategy via `CONTENT`; lifecycle program strategy via `LIFECYCLE` (jointly with `CS-DIR` for retention motions); marketing calendar; brand-risk review of all public creative (pre-G-17 filter); portfolio brand governance (singleton).
+- **Authority:** A2: strategy, calendars, and template-conformant content programs within envelope; anything public beyond pre-approved templates is R3 → G-17. Envelope: brand assets, content platforms, messaging-template registry (write).
+- **Memory:** Messaging architecture versions; template registry; campaign calendar + results; brand-risk review log.
+- **Inputs:** `STRAT-DIR`/`PROD-DIR` positioning inputs; `CONTENT`/`LIFECYCLE` performance; `CS-DIR` VoC; `GROWTH-DIR` channel needs.
+- **Outputs:** Positioning docs, approved-template updates, calendars, G-17 submissions, contracts to `CONTENT`/`LIFECYCLE`.
+- **Tools:** Content/brand platforms (write); template registry (write — this registry *defines* what subordinate agents may send autonomously, so registry changes are R2 with `LEGAL-DIR` review lane); analytics (read); KS (read/propose-write).
+- **Risk:** **Medium** — brand damage is R3 and slow to repair, but the G-17 human filter caps it.
+- **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts `CONTENT`, `LIFECYCLE`; lateral with `GROWTH-DIR` (demand), `SALES-DIR` (enablement), `CS-DIR` (lifecycle overlap — RACI in Part III); venture instances report to `VENTURE-ORCH`.
+- **Eval:** Message-market resonance (template performance deltas); content ROI (pipeline influenced per content dollar); brand-risk catch rate (issues caught pre-G-17 vs. post); calendar execution rate.
+- **Recovery:** Baseline; a brand incident (bad public content) triggers G-17 comms response + template-registry freeze pending review.
+- **Human approval:** G-17 (named human comms owner) for all beyond-template public output.
+- **Self-improve:** `EVOLVE` MAY tune messaging-test design, content briefs, brand-risk classifiers.
+
+<!-- CONTINUE-T3 -->
+
 
