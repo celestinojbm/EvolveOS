@@ -12,8 +12,11 @@
 |---|---|---|---|---|---|---|
 | **G-00** | Emergency Stop | Any authorized human, any Watchdog, or `PRIME` invokes halt on an agent, venture, or the whole system | Control action (always available) | Triggering evidence | Any single authorized human (uni-directional: stopping never needs quorum; **re-starting** needs the owning gate's approver) | Immediate |
 | **G-16** | Constitutional Change | Any modification to Parts 0/X/XI/Appendix C, any autonomy-ceiling change, any change to Kernel enforcement rules | R4 | Evolution proposal (EP), impact analysis, rollback plan, red-team review | TSC quorum (≥3 humans) + CEO sign-off | ≤ 14 days |
+
 | **G-17** | Public Communication | Brand/PR statements, public launches announcements, social posts beyond pre-approved templates, press interaction | R3 | Draft, audience, risk note | Named human comms owner (A1) | ≤ 24 h |
 | **G-18** | Data Use Expansion | Any use of personal or customer data outside its approved classification/purpose; new data acquisition sources | R3 | Privacy review by `PRIVACY`, legal note | GC or delegated privacy officer | ≤ 5 days |
+
+> **Revision (XV-4):** The G-16 TSC quorum (≥3) MUST be counted excluding the CEO; the CEO's sign-off remains a separate mandatory act, and the CEO MAY attend but MUST NOT chair the G-16 session or count toward its quorum. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ## Pipeline gates (Part V state machine)
 
@@ -43,3 +46,7 @@
 4. **Batching.** A2 gates (G-03, G-04) are reviewed by humans in weekly batch: the human sees the full decision list and MAY veto retroactively within 7 days for anything still R2.
 5. **No gate shopping.** A rejected gate submission may be resubmitted only with materially new evidence, flagged as a resubmission with a diff against the rejected DR.
 6. **Stop asymmetry.** G-00 stops require one human; restarts require the owning gate's full approver set. Stopping must always be cheaper than starting.
+
+> **Revision (XV-1):** Rule 6 amended: venture-, process-, and decision-scoped G-00 stops restart only via the owning gate's full approver set (unchanged). Infrastructure-scope stops (agent class, platform component, whole system) MAY be restarted by an emergency restart quorum of three — the CISO, the accountable officer of the stopped scope (CEO for system scope), and one EC member who neither triggered the stop nor is that officer — after review of the triggering evidence; every emergency restart MUST be ratified by the owning approver set within 5 business days or the stop re-engages automatically (Kernel-enforced). Two or more system-scope G-00 invocations by the same principal within 30 days without ARC-validated cause trigger an ARC review of that principal's invocations (review only; stop authority is never suspended by default). See Part XV (`15-critique-and-revisions.md`) §4.
+
+> **Revision (XV-2):** New mechanic 7: every human approval of an R4 gate decision MUST be executed as (a) a hardware-security-key signature over the decision digest (extending Part X §6.3 to all R4 gates), and (b) out-of-band confirmation on a pre-registered second channel whenever the approval request or its material inputs arrived through any channel other than the Kernel-rendered gate queue. A session-authenticated click is never sufficient for R4. See Part XV (`15-critique-and-revisions.md`) §4.

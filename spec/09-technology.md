@@ -335,6 +335,8 @@ Agent runtime containers have **no network route except to PEPs** — non-bypass
 
 **The Kernel is configured, not commanded.** No agent — including `PRIME` and `EVOLVE` — has any API to alter Kernel policy at runtime. Policy changes ship as reviewed, signed bundles through `RELEASE` (§8.2, §16.3); changes to enforcement semantics are R4 via **G-16**.
 
+> **Revision (XV-9):** The Kernel's core enforcement invariants — envelope slices form a strictly shrink-only lattice; over-envelope/over-matrix actions convert to A1 (never execute, never fail silently); exactly one macro-state per venture; G-00 stop/restart per the amended stop asymmetry; separation-of-duties set-disjointness — MUST be specified in a machine-checkable formal model (TLA+/Alloy-class), with model-checking runs in CI on every change to enforcement semantics. A G-16 enforcement-rule change without an updated, passing model is invalid. This is additionally a precondition of dependency D5 (Part XIV §11): no treasury automation before the model passes. See Part XV (`15-critique-and-revisions.md`) §4.
+
 ### 9.2 Watchdogs
 
 Watchdogs are independent monitor processes (Appendix A definition) with these binding properties:
@@ -618,6 +620,8 @@ Watched bottlenecks, each with a named mitigation path owned by `INFRA-DIR`:
    - small/fast models: T4 bulk tasks, classification, extraction.
    Routing tables are `AI-DIR`-owned configuration, benchmarked continuously by `EVALUATOR`; a routing change that degrades any safety-relevant eval is auto-reverted by the same guardrail machinery as §16.2 step 9.
 2. **Multi-vendor from day 1** for inference — unlike infrastructure hosting (§4): ≥ 2 qualified providers per tier, contract terms tracked by `VENDOR`, provider-failover runbooks tested quarterly. WHY the asymmetry with §4: model quality and price shift monthly, provider capacity crunches correlate, and switching cost at the API layer stays low only if it is never allowed to grow — whereas cloud switching cost is inherently high and buys little when hedged by the exit plan.
+
+> **Revision (XV-6):** For every agent class serving T1/T2 agents, and for `EVALUATOR`, `RISK-QUANT`, and `RED-CELL`, a second qualified vendor MUST hold a current golden-suite pass (warm, re-validated at every suite version change), and quarterly failover drills MUST execute an actual routing cutover for a sampled subset of these classes, with results reported to the TSC (a failed drill is a Sev-3 with fix SLA). The RISK-AI-02 heterogeneity mitigation is upgraded to MUST: `EVALUATOR` judging and `RISK-QUANT` verification run on a different base model than the dominant doing-model unless the TSC grants a documented, annually-renewed waiver. See Part XV (`15-critique-and-revisions.md`) §4.
 3. **Cost controls:**
    - prompt/context caching wherever supported (agent cards are cache-stable by design: static preamble, volatile context appended);
    - batch-tier submission for all non-latency-sensitive work — `SCOUT` scans, `EVALUATOR` suites, embedding jobs — with a target of ≥ 40% of total tokens on batch pricing **[ASSUMPTION]**;

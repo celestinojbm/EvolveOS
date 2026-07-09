@@ -48,6 +48,8 @@ Five phases. Each phase's **exit criteria are measurable and MUST be met before 
 
 **Dominant risks.** Platform-before-product death spiral (building the Kernel forever, launching nothing); founding-team key-person loss; spec ratification delay pushing all agent spend right; AI cost overrun **[UNCERTAIN]** (§13.3).
 
+> **Revision (XV-12):** Pathfinder rule — Phase 0 designates exactly one pathfinder venture, which MUST clear each of G-04, G-05, and G-06 end-to-end in manual-heavy mode before any second venture clears the same gate; parallel exploration through G-01–G-03 continues unrestricted, and each pathfinder gate passage MUST produce its stage post-mortem KI set before the next venture attempts that gate. A ≤ one-quarter slip of M4 attributable to this rule is pre-authorized. See Part XV (`15-critique-and-revisions.md`) §4.
+
 ### 2.2 Phase 1 — Pipeline proving (2028-Q1 → 2029-Q2)
 
 **Objectives.**
@@ -243,11 +245,14 @@ Acceptance is by DR with the named approver; a milestone slipping > 1 quarter tr
 | **M4** | First revenue | ≥ 1 external customer paid real money on live rails; booked by `LEDGER`, reconciled; cohort instrumentation (`UNIT-ECON`) capturing from day one | 2027-09 | CFO |
 | **M5** | First venture killed by pre-registered criteria, with post-mortem KI | A post-G-04 venture killed strictly on its pre-registered criteria (no override, no extension); post-mortem produces ≥ 3 validated KIs + counterfactual entry; kill executed ≤ 14 days from signal | 2027-11 | IC-delegate |
 | **M6** | First G-07 entity formation | PMF evidence pack per `05-business-creation-pipeline.md`; IC quorum (≥3) + GC approval; entity formed, seed ≤ $1M allocated; venture envelope re-issued at entity scope | 2028-05 | IC + GC |
+| **M6b** | Capital-structure & returns model ratified (Revision XV-8) | Capital-structure decision (HoldCo/fund/hybrid, with GC; no instrument bypasses G-16); platform-cost recovery mechanism; returns model benchmarked vs. VC median (M-4) AND venture-studio base rates — ratified by the IC as an R4 DR; **precondition to any G-08 tranche** | before first G-08 | IC + CFO |
 | **M7** | Self-evolution EP pipeline live | ≥ 1 EP full cycle: proposal → benchmark → shadow mode → staged rollout → post-rollout evaluation; rollback drill executed on a deliberate dud EP; Constitutional-Layer changes provably excluded (G-16 test) | 2028-09 | TSC |
 | **M8** | First acquisition | G-12 both steps (LOI: IC quorum; close: Board majority); DD pack by `MNA-ANALYST` under `CORPDEV-DIR` A1; 100-day integration plan pre-registered with kill criteria; financing within `08-finance.md` limits | 2030-06 | Board |
 | **M9** | First exit | G-14 Board majority; realized proceeds booked; full venture-lifecycle post-mortem corpus (formation→exit) versioned as playbooks | 2031-09 | Board |
 | **M10** | Compounding evidenced | Phase 2 exit-criteria 3–4 (§2.3) met: portfolio learning rate positive on all components for 4 quarters; 25+ ventures | 2032-12 | EC + Board |
 | **M11** | External capital **[UNCERTAIN]** | Audited multi-year track record; LP terms preserving Constitutional Layer inviolability (no external bypass of G-16); Board approval | 2035 | Board |
+
+> **Revision (XV-8):** Milestone M6b added — before the first G-08 tranche, the IC MUST ratify as an R4 DR the capital-structure decision, the platform-cost recovery mechanism, and a portfolio returns model benchmarked against both the vintage-matched VC median and published venture-studio base rates; G-08 is closed until M6b exists (binding text in Part VIII §14). See Part XV (`15-critique-and-revisions.md`) §4.
 
 ---
 
@@ -267,6 +272,8 @@ Binding dependency set. The Kernel MUST encode D1, D5, and D7 as enforceable pre
 | **D8** | PMF evidence + revenue history | G-07 entity formation | Entities are R4; forming them on validation-stage evidence converts cheap R2 kills into expensive R4 wind-downs (G-15) |
 | **D9** | EP pipeline (M7) + `EVALUATOR` benchmarks | Scaling live agent count past wave 4 breadth | Without regression detection and calibration tracking, more agents means more unmeasured drift |
 | **D10** | Operating track record + calibrated `FIN-MODEL`/`RISK-QUANT` | Corp-dev cluster activation (wave 6) | M&A priced by uncalibrated models is systematic overpayment; integration without operating playbooks is the classic acquirer failure |
+
+> **Revision (XV-9):** Dependency D5 amended — treasury automation (`TREASURER` beyond A0 on live rails; `FRAUD-WATCH` auto-holds on real money) additionally requires a passing machine-checkable formal model (TLA+/Alloy-class) of the Kernel's core enforcement invariants, model-checked in CI on every enforcement-semantics change, not only the `RED-CELL` pass (binding text in Part IX §9.1). See Part XV (`15-critique-and-revisions.md`) §4.
 
 ---
 
@@ -324,6 +331,8 @@ Everything else — growth automation, finance hardening, self-evolution, corp-d
 | **Total FTE-equivalent** | **~7.5** | **~10** | **~13.5** | **~17** | **~18** | Sublinear vs venture count — the design point |
 
 WHY sublinear: the `01-philosophy.md` human-hours-per-venture metric falls only if headcount does not track venture count; hiring linearly would concede the core thesis.
+
+> **Revision (XV-7):** The Y1 "independent committee members" seats are voting members from founding (not advisory): until the first G-07, the IC and TSC quorums MUST each include at least one compensated external independent member, and the first G-07 is blocked until the Board is seated per Part XI §2.1 with at least two independent directors and an independent ARC chair (binding text in Part XI §3). Budget for the seats is carried in this plan. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ### 13.2 Capital plan — the $10M
 

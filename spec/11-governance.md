@@ -50,9 +50,13 @@ The Board's reserved-matters list **is exactly the set of R4 gates** in `appendi
 - Standing board pack: portfolio state by pipeline stage (`05-business-creation-pipeline.md`), capital position (`08-finance.md`), risk register movements (`13-failure-analysis.md`), ARC oversight-quality metrics (§10.3), TSC evolution report (§3.4), all R4 DRs since the last session.
 - Every director has unrestricted read access to all DRs subject only to the exceptions of §12.1.
 
+> **Revision (XV-11):** Binding — every R4 gate pack decided by the Board or IC MUST be formally adopted and attested by its accountable officer (§4) before the vote: the officer presents the material as their own professional product, so director reliance runs on a human officer/expert as reliance doctrine requires. Agent authorship remains fully documented in the DR; the attestation adds human adoption, never obscures provenance. See Part XV (`15-critique-and-revisions.md`) §4.
+
 ## 3. Committees
 
 Committees are committees *of humans*. Agents present to committees; agents never sit on them, vote, or count toward quorum (§7). Each committee SHALL keep minutes, and every approval it grants MUST cite the gate ID it exercises and attach the DR.
+
+> **Revision (XV-7):** Binding founding-configuration rules: (1) from founding until the first G-07, the IC and TSC quorums MUST each include at least one compensated external independent member (neither officer nor employee) — the Part XIV §13.1 Y1 independent seats are voting seats, not advisory; (2) no individual may sit on more than two of {IC, TSC, ARC}, and no gate approver may review a domain they operate; (3) the first G-07 MUST NOT clear until the Board is seated per §2.1 with at least two independent directors and the ARC has an independent chair. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ### 3.1 Executive Committee (EC)
 
@@ -87,6 +91,8 @@ Committees are committees *of humans*. Agents present to committees; agents neve
   3. **Evolution oversight:** supervises `EVOLVE` per `12-self-evolution.md` — approves benchmark-suite changes, reviews the evolution-proposal (EP) pipeline health, and receives all auto-rollback events.
   4. **Model governance:** oversees `AI-DIR` decisions on base-model selection and upgrades, which are treated as agent changes under `12-self-evolution.md` §6.
 - **WHY a dedicated committee rather than folding this into ARC:** ARC's competence is retrospective assurance; TSC's is prospective capability judgment. Merging them overloads one body with two distinct skill sets and creates a single human chokepoint for both audit and evolution — a governance single point of failure recorded as `RISK-ORG-04` in `13-failure-analysis.md`.
+
+> **Revision (XV-4):** Binding — for G-16, the TSC quorum (≥3) is counted excluding the CEO; the CEO's sign-off remains a separate mandatory act; the CEO MAY attend but MUST NOT chair a G-16 session or count toward its quorum. A G-16 session is chaired by an independent director whenever one sits on the TSC. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ## 4. Officers and accountable ownership of director agents
 
@@ -160,6 +166,8 @@ These constraints bind every venture, every agent, and every playbook. They are 
 2. **No regulated-deception marketing.** No fabricated reviews or testimonials, no fake scarcity or fake countdown timers, no undisclosed material connections, no claims lacking substantiation held *before* publication. `CONTENT`, `ADS`, `LIFECYCLE`, and `OUTBOUND` envelopes MUST encode these as hard blocks, and G-17 reviewers MUST check for them.
 3. **Data-use limits beyond legal minimums.** Personal data is used only for the purpose collected; no sale of personal data; no cross-venture joining of personal data without a G-18 approval *even where local law would permit it silently*; retention minimization by default (`06-knowledge-system.md` expiry machinery). **WHY beyond legal minimums:** privacy law is a lagging indicator of public expectation; pricing compliance to the legal floor guarantees periodic reputational shocks as the floor rises.
 4. **AI disclosure.** **[ASSUMPTION]** Customers interacting with an agent (e.g., `SUPPORT`, `OUTBOUND`) MUST be able to learn they are interacting with an AI system upon asking, and disclosure SHOULD be proactive where the interaction is relational rather than transactional. Assumed because disclosure norms are still forming; the TSC MUST revisit as regulation crystallizes (§7.3).
+
+> **Revision (XV-16):** Binding — disclosure MUST be proactive (not merely on request) in all relational or ongoing customer interactions (support threads beyond a single exchange, account management, negotiations, retention/churn-save conversations) and wherever a jurisdiction's bot-disclosure or AI-transparency rules apply; reactive-only disclosure is permissible solely for one-shot transactional exchanges. Disclosure wording ships in the G-17-approved template sets; the XV-11 register records where statutory disclosure duties bind. See Part XV (`15-critique-and-revisions.md`) §4.
 5. **No exploitation of cognitive vulnerability.** No targeting of minors with manipulative monetization; no products tuned to compulsion metrics (see refusal category 1 below) even as a "feature" of an otherwise acceptable venture.
 
 ### 6.2 Refusal categories — venture types EvolveOS will not build or buy
@@ -219,6 +227,8 @@ Compliance is owned by the GC through `COMPL-DIR`, with `REG-WATCH` as the monit
 3. **License management.** A register of licenses/permits per venture and jurisdiction, with renewal workflows; operating a revenue activity without its mapped license is a Kernel-flagged envelope violation.
 4. **Compliance gates within the pipeline.** A venture MUST hold a **compliance clearance** — `COMPL-DIR` attestation, countersigned by the GC or delegate, that the obligation register for its activity and jurisdictions is complete and satisfied — as part of the launch-readiness inputs to **G-06**, and a localized compliance plan as part of the inputs to **G-11**, per the decision-inputs columns of `appendix-c-decision-gates.md`. **WHY pre-gate rather than post-launch:** compliance debt compounds like technical debt but with prosecutors.
 5. **Regulatory change response.** `REG-WATCH` alerts map changes to affected ventures within its SLA (`03-organizational-architecture.md`); changes that invalidate a clearance suspend the affected activity's envelope pending re-clearance — automatic conversion to A1, per the Kernel queueing rule of Appendix C.
+
+> **Revision (XV-11):** Binding — `COMPL-DIR` SHALL maintain a standing **agent-to-regulated-activity register**: for every registered agent, per operating jurisdiction, the regulated activities it touches (including EU AI Act risk classification — e.g., Annex III employment exposure for `RECRUITER`, credit/essential-services adjacency for `FRAUD-WATCH` holds, automated-pricing/consumer-protection exposure for `PRICER`/`LIFECYCLE`), the licensed-profession boundaries it operates near (`CONTRACTS` — legal practice; `SUPPORT` — regulated advice; `TREASURER` — investment activity), the obligations triggered, and the ceiling or jurisdiction-conditional caps applied (§7.3). The register is reviewed at every G-11 and at least annually by the GC; a venture's G-06 compliance clearance MUST cite the register entries for every agent instance serving that venture. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ## 9. Corporate governance
 

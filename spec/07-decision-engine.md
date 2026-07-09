@@ -282,6 +282,8 @@ Quorum rules by reversibility class of the decision (assessors are agents; human
 4. Aggregate rankings by weighted Borda count over the composite scores.
 5. **Dissent preservation:** any assessor whose top option differs from the aggregate winner, or whose p(total loss) for the winner exceeds the aggregate's by more than 2×, automatically generates a `dissent_record` entry carried into the DR and the human brief (§8.2.4). Dissent is never averaged away; it is attached.
 
+> **Revision (XV-14):** Calibration weights are conditioned on decision class AND domain regime (regime vocabulary owned by `EVALUATOR` with `DATA-DIR`). For decisions outside the distribution over which an assessor's calibration was measured (new venture domain, new archetype, declared regime change), that assessor's weight shrinks toward uniform per the §9.2 cold-start rule as applied within the regime, regardless of its global score. Any DR whose assessor panel is majority out-of-regime MUST carry an out-of-distribution flag rendered in the §8.2 human brief, and `EVALUATOR` reports per-agent calibration coverage across regimes. See Part XV (`15-critique-and-revisions.md`) §4.
+
 ### 9.3 [DECISION] Aggregation mechanism — alternatives compared
 
 - **Simple majority / unweighted average.** Rejected. Treats a chronically miscalibrated assessor as equal to a well-calibrated one, discards exactly the information `EVALUATOR` exists to produce, and invites quorum-stuffing with cheap correlated agents.
@@ -330,6 +332,8 @@ At each review date, `EVALUATOR` (with inputs from `COMP-INTEL`, `TRENDS`, `INSI
 ### 11.3 Selection-bias limits [UNCERTAIN]
 
 Counterfactual scoring is structurally biased and MUST be labeled as such in every readout: (a) proxies are observable only for *rejected* paths that someone else pursued — markets nobody entered stay dark, so the sample over-represents contested spaces; (b) a competitor's success in a killed market does not establish *we* would have succeeded (execution fit, §5, differs); (c) survivorship in proxy sources (funded competitors are visible, quiet failures are not) inflates apparent false-kill rates. Mitigations: report counterfactual scores with explicit proxy-quality grades; use them to tune *thresholds and calibration*, never as stand-alone justification to overturn a class of decisions; and let `CURATOR` flag proxy sources with known survivorship distortion. The ledger's honest yield is directional bias correction, not decision-grade counterfactual truth.
+
+> **Revision (XV-10):** Proxy-scored counterfactual outcomes constitute a distinct evidence tier, **E-CF (counterfactual, proxy-graded)**: each datum carries its proxy-quality grade and the §11.3 caveats structurally; E-CF scores MUST NOT enter calibration ledgers at parity with realized outcomes (weight cap 0.25 relative to realized-outcome scores **[ASSUMPTION]**, TSC-tunable); and E-CF evidence MUST NOT be cited as material evidence in R3+ DRs except in kill-criteria threshold-tuning EPs, where its use and grade MUST be stated. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ## 12. Rollback
 

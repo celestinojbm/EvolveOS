@@ -66,6 +66,8 @@ The architecture deliberately centralizes three things — enforcement (Kernel),
 | **Mitigation** | Multi-vendor routing capability maintained *warm* — second-source models pass golden suites for critical agent classes even while unused **[ASSUMPTION:** costs eval spend; justified as insurance]; model upgrades as full L2 EPs (`12-self-evolution.md` §6); contractual notice periods where negotiable; degraded-mode task prioritization plan (`08-finance.md` cost triage). |
 | **Recovery** | Invoke second-source routing for critical agents (pre-benchmarked); shed low-priority agent workloads to fit capacity; humans absorb R3-adjacent judgment gaps (already gate-holders); re-benchmark portfolio metrics after the switch since correlated behavior change is guaranteed (see RISK-AI-02). |
 
+> **Revision (XV-6):** The warm-second-source mitigation is no longer an [ASSUMPTION]: for agent classes serving T1/T2 agents and for `EVALUATOR`/`RISK-QUANT`/`RED-CELL`, a second qualified vendor MUST hold a current golden-suite pass, and quarterly failover drills MUST execute an actual routing cutover for a sampled subset of these classes, reported to the TSC (Part IX §22.3). See Part XV (`15-critique-and-revisions.md`) §4.
+
 ## 2. Organizational failures (ORG)
 
 ### RISK-ORG-01 — Human oversight capacity saturation as the portfolio scales
@@ -315,6 +317,8 @@ Thesis-level risks: ways the world can make EvolveOS's strategy wrong even if it
 | **Detection** | Hard by construction; controls: cross-model disagreement sampling by `EVALUATOR` (run material DRs through a second-source model and measure divergence — low divergence on *hard* questions is the warning sign, `12-self-evolution.md` §12.4 held-out machinery assists); human gate review as the only truly independent channel at R3+; `RED-CELL` adversarial probes designed to find shared blind spots. Humans: TSC. |
 | **Mitigation** | Model heterogeneity policy **[ASSUMPTION]**: `AI-DIR` SHOULD route structurally critical *checking* functions (`RISK-QUANT` verification, `EVALUATOR` judging, red-team) to a different base model than the *doing* functions, cost permitting — diversity purchased as a control, not as a preference; the autonomy–reversibility matrix caps how far any correlated error can execute without a human; kill criteria are model-independent arithmetic. |
 | **Recovery** | On discovering a shared blind spot: sweep all recent DRs whose reasoning pattern matches it (audit-log + DR corpus search), re-open the reversible, annotate the rest; add the pattern to golden suites (§12, `12-self-evolution.md`) so regressions are caught; report to TSC as a standing agenda item. |
+
+> **Revision (XV-6):** The model-heterogeneity mitigation is upgraded from SHOULD to MUST: `EVALUATOR` judging and `RISK-QUANT` verification run on a different base model than the dominant doing-model, unless the TSC grants a documented, annually-renewed waiver (Part IX §22.3). See Part XV (`15-critique-and-revisions.md`) §4.
 
 ### RISK-AI-03 — Deceptive or reward-hacking agent behavior
 

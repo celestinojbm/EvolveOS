@@ -193,6 +193,8 @@ WHY failure data is the moat — stated as a binding design premise: success dat
 
 **Decision history** is the DR store (schema owned by `07-decision-engine.md`): every R2+ decision as an immutable DR, linked into the graph (`Decision` entities, §4). Attached to it is the **counterfactual ledger** (glossary): rejected options, kill decisions, and passed deals, each with predicted outcomes, later scored against observed reality where possible. `EVALUATOR` computes agent and approver calibration scores from exactly this join (prediction events × outcome events), feeding consensus weights in Part VII and retraining/retirement triggers in Part XII.
 
+> **Revision (XV-10):** Proxy-scored counterfactual outcomes are stored and retrieved as a distinct evidence tier, E-CF (counterfactual, proxy-graded), carrying their proxy-quality grade structurally; scoring and usage limits (calibration weight cap, R3+ citation prohibition) are defined in Part VII §11. See Part XV (`15-critique-and-revisions.md`) §4.
+
 ---
 
 ## 11. Versioning and supersedence

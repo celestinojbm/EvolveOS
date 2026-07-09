@@ -2,6 +2,8 @@
 
 **Status:** Draft v0.1 · **Rule:** every term used in two or more parts is defined here, once. Parts cite these terms verbatim and MUST NOT redefine them.
 
+> **Revision (XV-5):** The **Envelope** definition is amended to include compute/token budgets as a first-class envelope dimension alongside spend, tools, data classes, action types, and rate limits (Part 0 §5 note; Part IX §22.3). See Part XV (`15-critique-and-revisions.md`) §4.
+
 | Term | Definition |
 |---|---|
 | **Accountable officer** | The single named human who answers for a director agent's conduct and outcomes (mapped in Part III §3 and Part XI). Every T1/T2 agent has exactly one; committees provide functional oversight but accountability is individual. |

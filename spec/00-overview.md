@@ -54,6 +54,8 @@ Per RFC 2119: **MUST**, **MUST NOT**, **SHALL** are binding requirements; **SHOU
 - All other parts are class-R2/R3 changes amendable through the standard proposal process defined in Part XII.
 - Rationale: the layers that constrain the AI's autonomy must not be modifiable by the AI they constrain, or the oversight guarantee is circular.
 
+> **Revision (XV-3):** A document MAY carry mixed change classes only by explicit section-level designation declared in its header; designated protected sections are Constitutional Layer content amendable only via G-16, change control tracks class at section level, undesignated content inherits the document's base class, ambiguity resolves to the higher class, and moving content between documents never changes its class. Ratified v0.1 mixed-class designations: Part VII header carve-outs, Part VIII header carve-outs, Part XII §15, Part XIV §11 (D1/D5/D7) and §13.4. See Part XV (`15-critique-and-revisions.md`) §4.
+
 ## 5. Canonical taxonomy 1 — Reversibility classes (R1–R4)
 
 Every action, decision, and change in EvolveOS MUST carry a reversibility class. The class is determined by the **worst-case cost and feasibility of undoing the action**, not by its expected outcome.
@@ -66,6 +68,8 @@ Every action, decision, and change in EvolveOS MUST carry a reversibility class.
 | **R4** | Irreversible / existential | Cannot be meaningfully undone, or failure threatens the portfolio | Entity formation/dissolution, M&A, layoffs, capital deployment > $1M, litigation, regulatory filings, changes to the Constitutional Layer, customer-data-affecting incidents |
 
 **[ASSUMPTION]** Dollar thresholds are calibrated to a portfolio starting at ~$10M deployable capital (Part XIV). They MUST be re-ratified by the Investment Committee whenever assets under management change by more than 2×. Thresholds exist because "irreversibility" alone is too vague to automate: agents need a computable classifier, and dollar/duration bounds are computable.
+
+> **Revision (XV-5):** The worst-case-cost basis of the R1–R4 classifier explicitly includes committed compute/inference cost at metered prices, and every envelope carries compute/token budgets as a first-class dimension (as Part IX §22.3 implements); exhausting a compute budget converts the agent's actions to A1 exactly as a money-envelope breach does. See Part XV (`15-critique-and-revisions.md`) §4.
 
 ## 6. Canonical taxonomy 2 — Autonomy levels (A0–A4)
 
