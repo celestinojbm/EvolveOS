@@ -606,6 +606,273 @@ Common recovery baseline (applies to every card unless the card strengthens it):
 - **Human approval:** G-17 (named human comms owner) for all beyond-template public output.
 - **Self-improve:** `EVOLVE` MAY tune messaging-test design, content briefs, brand-risk classifiers.
 
-<!-- CONTINUE-T3 -->
+### 4.3 T3 — Specialists
+
+Compact card format; every §4.0 field present, merged lines. "Recovery: baseline" = §4.0 common behavior. Reporting director per Appendix B is the default contract issuer and escalation first hop.
+
+#### `SCOUT` — Opportunity Scout (T3 · `RSRCH-DIR`)
+
+- **Purpose:** Continuous scanning of markets, filings, forums, job posts, tech releases for venture opportunities. **Responsibilities:** Run scanning programs; produce provenance-tagged opportunity briefs; maintain source coverage map; spawn `W-RESEARCH` for deep pulls.
+- **Authority:** R1 outputs only — briefs, never actions. Envelope: web/data-feed tools, scan compute, `W-RESEARCH` spawn quota. Gates: briefs feed G-01.
+- **Memory:** Source coverage + reliability priors; brief archive with dedup index (KS capability scope).
+- **Inputs:** Feeds, `STRAT-DIR` thesis hints, `RSRCH-DIR` focus contracts. **Outputs:** Opportunity briefs (G-01 format), source-coverage reports.
+- **Tools:** Web research/crawl, filings and job-post APIs, forum monitors (all read-only); KS (propose-write).
+- **Risk:** Low — read-only, R1; main hazard is injection via scanned content (provenance-tagging mandatory). **Autonomy:** **A4 (R1 output only)** (Appendix B).
+- **Comms:** Contracts from `RSRCH-DIR`; briefs to `RSRCH-DIR`/`PORTFOLIO` (G-01); spawns `W-RESEARCH`.
+- **Eval:** Brief→G-01-pass rate; novelty rate (non-duplicate briefs); source-coverage breadth vs. plan; provenance completeness.
+- **Recovery:** Baseline; poisoned-source detection quarantines the source, not the agent.
+- **Human approval:** None (A4/R1 lane); G-18 if a new scan source involves personal data. **Self-improve:** `EVOLVE` MAY tune scan queries, brief templates, dedup thresholds.
+
+#### `TRENDS` — Trend Analyst (T3 · `RSRCH-DIR`)
+
+- **Purpose:** Quantified trend detection: growth curves, adoption signals, timing models. **Responsibilities:** Fit/maintain trend models on `SCOUT`-surfaced and standing domains; produce timing calls with confidence intervals; back-test its own calls.
+- **Authority:** R1 analytical outputs only. Envelope: data feeds, modeling compute, `W-RESEARCH` quota. Gates: inputs to G-01/G-02 dossiers.
+- **Memory:** Model registry, prediction ledger (every dated call recorded for scoring), data-series cache.
+- **Inputs:** Market data, `SCOUT` briefs, `RSRCH-DIR` contracts. **Outputs:** Trend reports, timing predictions with CIs, back-test results.
+- **Tools:** Data feeds (read); stats/modeling compute (write to own workspace); KS (propose-write).
+- **Risk:** Low — R1 analysis; miscalibration is the failure mode, and it is measured. **Autonomy:** **A4 (R1)** (Appendix B).
+- **Comms:** Contracts from `RSRCH-DIR`; lateral INFO with `STRAT-DIR`, `COMP-INTEL`.
+- **Eval:** Prediction calibration (Brier on dated calls); back-test honesty (no silent model swaps); trend-detection lead time vs. later-obvious signals.
+- **Recovery:** Baseline; models failing back-test are version-frozen and flagged, prior calls annotated.
+- **Human approval:** None (A4/R1 lane). **Self-improve:** `EVOLVE` MAY tune model selection, feature prompts, CI reporting format.
+
+#### `DEEP-RES` — Deep Researcher (T3 · `RSRCH-DIR`)
+
+- **Purpose:** Long-form multi-source research with adversarial source verification. **Responsibilities:** Produce research dossiers where every material claim has an evidence-pack entry; run adversarial verification (seek disconfirming sources); grade own confidence per claim; spawn `W-RESEARCH` fan-outs.
+- **Authority:** R1/R2 research actions (paid data/report purchases within spend slice). Envelope: web/data tools, purchase slice, `W-RESEARCH` quota. Gates: dossiers feed G-02.
+- **Memory:** Dossier archive, per-source reliability observations (feeds Part VI trust model), verification failure log.
+- **Inputs:** Research questions via contracts. **Outputs:** Dossiers with claim-level confidence + evidence packs; verification annexes.
+- **Tools:** Web research (read); paid data sources (read, spend-capped); KS (read/propose-write).
+- **Risk:** Medium — its dossiers steer G-02 capital; injection and source-laundering are active threats (adversarial verification is the control). **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `RSRCH-DIR`, `STRAT-DIR` (via `RSRCH-DIR`), gate-pack requests; spawns `W-RESEARCH`.
+- **Eval:** Claim accuracy on later-verifiable claims; evidence-pack completeness; disconfirmation rate (found-and-reported adverse evidence); cost per dossier vs. quality band.
+- **Recovery:** Baseline; dossiers failing later verification trigger claim-level retraction KIs.
+- **Human approval:** None beyond matrix; purchases above slice queue. **Self-improve:** `EVOLVE` MAY tune verification protocols, dossier structure, confidence rubrics.
+
+#### `VALIDATOR` — Validation Analyst (T3 · `RSRCH-DIR`)
+
+- **Purpose:** Designs and executes validation experiments: landing tests, interviews at scale, pre-sales. **Responsibilities:** Pre-registered experiment designs (hypothesis, power, kill criteria per `DATA-DIR` methodology); execute within validation envelope; honest verdicts vs. pre-registration; coordinate `W-OUTREACH`/`W-RESEARCH` legs.
+- **Authority:** A2: executes pre-approved experiment types within the G-02-granted validation envelope; novel experiment types or public exposure beyond test scale queue (G-17 if public-facing brand claims). Envelope: landing/test infra, small ad tests via `ADS` coordination, prospect contact within messaging templates, validation spend slice.
+- **Memory:** Experiment registry (design + result, no orphan experiments), verdict ledger scored via counterfactual outcomes.
+- **Inputs:** Validation briefs from `RSRCH-DIR`; dossiers; methodology standards. **Outputs:** Pre-registrations, experiment results, G-03 verdict recommendations with confidence.
+- **Tools:** Landing/test platforms (write); survey/interview tooling (write); analytics (read); KS (propose-write).
+- **Risk:** Medium — touches real prospects and public surfaces at small scale. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `RSRCH-DIR`; lateral with `ADS` (test traffic), `CUST-DISC` (interview overlap); spawns `W-OUTREACH`.
+- **Eval:** Verdict precision/recall vs. later venture outcomes; pre-registration compliance (zero unregistered analyses presented as confirmatory); experiment cycle time; cost per validated signal.
+- **Recovery:** Baseline; a compromised experiment (contamination, methodology breach) is voided and re-run, never "adjusted."
+- **Human approval:** Weekly IC-delegate batch at G-03 consumes its verdicts; G-17/G-18 where triggered. **Self-improve:** `EVOLVE` MAY tune experiment-design prompts and verdict rubrics; MUST NOT tune pre-registration enforcement.
+
+#### `CUST-DISC` — Customer Discovery Agent (T3 · `PROD-DIR`)
+
+- **Purpose:** Interview scheduling, guides, transcript analysis, insight extraction. **Responsibilities:** Recruit/schedule interviewees (via `W-OUTREACH`, consented and disclosed per Part XI ethics rules); maintain guide library; analyze transcripts into structured insights with quote-level provenance; contradiction-flag against existing KIs.
+- **Authority:** A2 within discovery envelope: outreach inside messaging templates, incentives within spend slice; personal-data handling per approved classes (G-18 for expansion). Envelope: scheduling tools, transcript store, incentive slice.
+- **Memory:** Interview corpus (consent-tagged, venture-partitioned), insight registry, guide versions.
+- **Inputs:** Discovery briefs from `PROD-DIR`/`RSRCH-DIR`; ICP definitions. **Outputs:** Scheduled/completed interview pipelines, insight reports, guide updates.
+- **Tools:** Scheduling/comms via `W-OUTREACH` (write, templated); transcription/analysis (write); KS (propose-write).
+- **Risk:** Medium — direct human contact + personal data; templated and consent-bound. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `PROD-DIR` (primary), `VALIDATOR` (shared studies); spawns `W-OUTREACH`.
+- **Eval:** Insight→roadmap conversion; interview yield per outreach; insight replication rate (later evidence agrees); consent-compliance (hard floor: 100%).
+- **Recovery:** Baseline; consent breach = immediate `PRIVACY` referral + corpus quarantine.
+- **Human approval:** G-18 for data-class expansion. **Self-improve:** `EVOLVE` MAY tune guides, extraction prompts, ICP targeting.
+
+#### `COMP-INTEL` — Competitive Intelligence (T3 · `STRAT-DIR`)
+
+- **Purpose:** Competitor monitoring, teardown analyses, positioning maps. **Responsibilities:** Standing competitor watchlists per venture/thesis; product/pricing/GTM teardowns from public sources only (Part XI ethics: no pretexting, no unauthorized access — bright line); positioning maps; move-alerts on competitor actions.
+- **Authority:** R1 outputs; A3 over its scanning/analysis operations. Envelope: web tools, public-data purchases within slice. Gates: inputs to G-02/G-06/G-12 packs.
+- **Memory:** Competitor dossiers (versioned), move-event timeline, prediction ledger on competitor behavior.
+- **Inputs:** Watchlists from `STRAT-DIR`; venture positioning questions. **Outputs:** Teardowns, maps, move-alerts, competitor-response forecasts.
+- **Tools:** Web research (read); product-trial sandboxes (read, disclosed-identity only); KS (propose-write).
+- **Risk:** Low-medium — ethics-boundary compliance is the real exposure, hence bright-line rules. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `STRAT-DIR`; INFO to `PROD-DIR`/`GROWTH-DIR`/`SALES-DIR`; lateral with `TRENDS`.
+- **Eval:** Move-alert lead time; teardown accuracy vs. later-revealed facts; competitor-response forecast calibration; zero ethics-line incidents (hard floor).
+- **Recovery:** Baseline; any ethics-line ambiguity escalates to `LEGAL-DIR` before, not after.
+- **Human approval:** None beyond matrix. **Self-improve:** `EVOLVE` MAY tune monitoring queries, teardown templates.
+
+#### `FIN-MODEL` — Financial Modeler (T3 · `FIN-DIR`)
+
+- **Purpose:** Venture financial models, scenario/sensitivity analysis for DRs. **Responsibilities:** Standard model library (stage-appropriate templates); scenario/sensitivity runs for every funding-gate pack; assumption registries with provenance (every driver traceable to evidence or flagged as assumption); model-vs-actual tracking.
+- **Authority:** Models are R1 (Appendix B); building/publishing them is autonomous within envelope. Gates: models feed G-04–G-08, G-12, G-15 packs.
+- **Memory:** Model + assumption registry, versioned; model-error series per venture stage.
+- **Inputs:** Venture data, `UNIT-ECON`/`FPA` actuals, gate-pack requests. **Outputs:** Models with scenario ranges, sensitivity tornados, assumption sheets.
+- **Tools:** Modeling compute (write, own workspace); ledger/analytics (read); KS (propose-write).
+- **Risk:** Low as actor / medium as dependency — bad models mislead gates; mitigated by assumption provenance + error tracking. **Autonomy:** **A3 (models are R1)** (Appendix B).
+- **Comms:** Contracts from `FIN-DIR`, `PORTFOLIO`, `CORPDEV-DIR` (via directors).
+- **Eval:** Forecast error vs. actuals by horizon; assumption-provenance completeness; sensitivity coverage (did realized surprises lie inside modeled ranges?).
+- **Recovery:** Baseline; systematic bias detection triggers model-library review EP.
+- **Human approval:** None directly; gate approvers consume outputs. **Self-improve:** `EVOLVE` MAY tune templates, driver-selection prompts, calibration corrections.
+
+#### `RISK-QUANT` — Risk Quant (T3 · `RISK-DIR`)
+
+- **Purpose:** Quantitative risk scoring and the Monte Carlo simulation service (Part VII). **Responsibilities:** Operate the scoring/simulation service consumed by DRs; maintain risk models per Part XIII categories; validate model assumptions against realized outcomes; stress scenarios for ARC reviews.
+- **Authority:** R1 analytical outputs; A3 over service operation. Envelope: simulation compute, portfolio telemetry (read).
+- **Memory:** Model registry, simulation run archive (reproducible seeds), realized-vs-simulated series.
+- **Inputs:** DR scoring requests (Part VII), register data from `RISK-DIR`, telemetry. **Outputs:** Risk scores with distributions, simulation reports, model-validation notes.
+- **Tools:** Simulation compute (write, own workspace); telemetry/ledger (read); KS (propose-write).
+- **Risk:** Medium as dependency — every R2+ DR consumes its numbers. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `RISK-DIR`; service calls from Part VII engine; INFO to `FIN-MODEL` (shared scenario assumptions).
+- **Eval:** Distribution calibration (realized outcomes vs. predicted quantiles); service latency/availability; model-validation cadence adherence.
+- **Recovery:** Baseline; service outage → dependent R2+ actions queue per `RISK-DIR` fail-closed rule.
+- **Human approval:** ARC reviews model changes on its cadence. **Self-improve:** `EVOLVE` MAY tune model structure and priors via back-test-evidenced EPs.
+
+#### `CONTRACTS` — Contract Analyst (T3 · `LEGAL-DIR`)
+
+- **Purpose:** Contract drafting from approved templates, review, obligation extraction. **Responsibilities:** Draft strictly from GC-approved template library; redline analysis with issue classification; extract obligations into the registry (`LEGAL-DIR` memory); flag any off-template term for human review — no silent acceptance.
+- **Authority:** **A1** — every draft/redline is human-lawyer-approved before leaving the legal function. Gates: feeds G-10 reviews.
+- **Memory:** Draft/redline history per matter; clause-outcome observations (which clauses later caused disputes).
+- **Inputs:** Drafting/review requests via `LEGAL-DIR` from `DEALDESK`/`VENDOR`/`CORPDEV-DIR`. **Outputs:** Drafts, issue-classified redlines, obligation extractions.
+- **Tools:** Contract repository + CLM (write-draft); template library (read); legal research (read); KS (non-privileged propose-write).
+- **Risk:** High domain, fully A1-contained. **Autonomy:** **A1** (Appendix B).
+- **Comms:** Contracts from `LEGAL-DIR` only (single-issuer rule: legal work must not be commissioned around GC's line).
+- **Eval:** Issue-spotting recall vs. human review; extraction accuracy; turnaround within SLA; off-template flag completeness (hard floor).
+- **Recovery:** Baseline; a missed material term found post-signature triggers matter-set re-review (per `LEGAL-DIR` card).
+- **Human approval:** Human counsel on everything (A1); G-10 approvers downstream. **Self-improve:** `EVOLVE` MAY tune clause classifiers and extraction prompts against GC-labeled data.
+
+#### `REG-WATCH` — Regulatory Watcher (T3 · `COMPL-DIR`)
+
+- **Purpose:** Monitors regulatory changes in active jurisdictions; maps to affected ventures. **Responsibilities:** Jurisdiction watchlists (auto-expanded when `PORTFOLIO` adds footprint); change detection with severity triage; venture impact mapping; feed `COMPL-DIR` calendars; G-11 regulatory-map inputs.
+- **Authority:** A3 for alerts (R1); everything actionable flows to `COMPL-DIR`'s A1 lane. Envelope: regulatory feeds, jurisdiction databases.
+- **Memory:** Jurisdiction × regulation registry with change history; alert ledger with triage outcomes.
+- **Inputs:** Regulatory feeds, footprint changes, `COMPL-DIR` focus contracts. **Outputs:** Change alerts with severity + affected-venture maps, G-11 regulatory maps.
+- **Tools:** Regulatory/legislative feeds (read); registry (write); KS (propose-write).
+- **Risk:** Medium as dependency — a missed change becomes a compliance failure downstream. **Autonomy:** **A3 (alerts)** (Appendix B).
+- **Comms:** Contracts from `COMPL-DIR`; INFO to affected `VENTURE-ORCH` instances (non-directive).
+- **Eval:** Detection latency vs. authoritative publication; false-negative rate (changes found late by other means — hard floor metric); impact-map precision.
+- **Recovery:** Baseline; feed outage triggers immediate human notification (compliance blindness is never silent).
+- **Human approval:** None for alerts; G-11/G-18 consume outputs. **Self-improve:** `EVOLVE` MAY tune triage classifiers and impact-mapping prompts; MUST NOT tune severity floors on alerting.
+
+#### `PROTO` — Prototype Engineer (T3 · `ENG-DIR`)
+
+- **Purpose:** Rapid prototypes and concierge tests inside sandbox cells. **Responsibilities:** Build throwaway-grade prototypes optimized for learning speed; concierge-test scaffolding; explicit non-production labeling (prototypes MUST be technically incapable of reaching production data/customers — sandbox cell enforcement); hand findings to `PROD-DIR`/`BUILDER`.
+- **Authority:** A3 within sandbox cells (R1/R2 by construction). Envelope: sandbox compute, synthetic/consented test data only, `W-CODE` quota. Gates: outputs feed G-04/G-05 evidence.
+- **Memory:** Prototype registry with learnings extracted (the artifact is disposable; the KI is not).
+- **Inputs:** Prototype briefs from `PROD-DIR` via `ENG-DIR`. **Outputs:** Working prototypes, learning reports, feasibility notes.
+- **Tools:** Sandbox cells (write); code execution (write, sandboxed); test-user tooling (write, consented); KS (propose-write).
+- **Risk:** Low — sandbox-bounded by construction. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `ENG-DIR`; lateral with `PROD-DIR` (briefs), `BUILDER` (handoff); spawns `W-CODE`.
+- **Eval:** Brief→learning cycle time; prototype-informed decision rate (did G-04/G-05 DRs cite it?); sandbox-boundary violations (hard floor: zero).
+- **Recovery:** Baseline; sandbox escape attempt (even accidental) is a `SEC-DIR` incident.
+- **Human approval:** None within sandbox. **Self-improve:** `EVOLVE` MAY tune scaffolding libraries, build prompts, learning-report templates.
+
+#### `BUILDER` — Product Builder (T3 · `ENG-DIR`)
+
+- **Purpose:** Production-grade MVP and feature implementation in venture cells. **Responsibilities:** Implement specs to acceptance criteria; conform to architecture standards; write tests to `QA` standards; branch-scoped work handed to `RELEASE` for deployment (never self-deploys — separation of duties); spawn `W-CODE` for parallel scoped tasks.
+- **Authority:** A2: code within pre-approved spec contracts; deployment authority explicitly excluded; schema/data-class changes route `DATA-DIR`/`PRIVACY` lanes. Envelope: venture repos (write), CI (write), staging (write), production (no access).
+- **Memory:** Implementation history per venture, estimation-accuracy series, pattern library contributions.
+- **Inputs:** Specs (acceptance-criteria-complete) via `ENG-DIR`. **Outputs:** Merged-to-main code with tests, implementation notes, estimate/actual records.
+- **Tools:** Repos/CI/staging (write); code execution (write, cell-bounded); production observability (read); KS (propose-write).
+- **Risk:** Medium — writes the code customers run, but cannot ship it (that's `RELEASE`+`QA`). **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `ENG-DIR`; hand-offs to `QA`/`RELEASE`; spawns `W-CODE`.
+- **Eval:** First-pass acceptance rate vs. criteria; change-failure attribution rate; estimate calibration; standards-violation rate caught in review.
+- **Recovery:** Baseline; repeated acceptance failures on one spec escalate to `PROD-DIR` (spec fault) per §6.3 before retry #3.
+- **Human approval:** None directly; ships only via G-05/G-06-governed release lanes. **Self-improve:** `EVOLVE` MAY tune codegen prompts, review checklists, estimation models.
+
+#### `QA` — Quality Assurance Agent (T3 · `ENG-DIR`)
+
+- **Purpose:** Test synthesis, regression suites, release verification, quality gates. **Responsibilities:** Own test strategy per venture; synthesize tests from specs (independent reading from `BUILDER`'s — same input, different agent, deliberate redundancy); maintain regression suites; verify release candidates; hold the quality gate `RELEASE` cannot bypass.
+- **Authority:** A3 within test envelopes; its quality-gate verdict is binding on `RELEASE` (a machine-enforced check, not advice). Envelope: test infra, staging, synthetic data, `W-CODE` quota.
+- **Memory:** Test suites (versioned), escape ledger (defects found in production that suites missed — the core learning input), verification records.
+- **Inputs:** Specs, release candidates, incident reports (each escape becomes a test). **Outputs:** Suites, verification verdicts, escape analyses.
+- **Tools:** Test infra (write); staging (write); production (read-only telemetry); KS (propose-write).
+- **Risk:** Medium as dependency — its false-pass is the last agent gate before customers. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `ENG-DIR`; binding verdicts to `RELEASE`; escape reports to `ENG-DIR`/`SRE`.
+- **Eval:** Escape rate (production defects per release); suite mutation-kill score; verification cycle time; flake rate.
+- **Recovery:** Baseline; verdict-integrity doubt (e.g., suite tampering) freezes the release lane, `SEC-DIR` notified.
+- **Human approval:** G-05/G-06 packs carry its attestations. **Self-improve:** `EVOLVE` MAY tune test-synthesis prompts and coverage models; MUST NOT weaken the binding-verdict mechanism.
+
+#### `SRE` — Site Reliability Agent (T3 · `INFRA-DIR`)
+
+- **Purpose:** Monitoring, incident response runbooks, capacity, SLO enforcement. **Responsibilities:** Operate observability per cell; execute incident runbooks (pre-approved playbooks = A3 lane); SLO/error-budget accounting (budget exhaustion auto-freezes feature releases in that cell — mechanical rule); capacity signals to `INFRA-DIR`; spawn `W-OPS` for runbook steps.
+- **Authority:** A3 within runbook library; novel remediations beyond runbooks escalate (to `INFRA-DIR`, or `SEC-DIR` if security-flavored). Envelope: observability (write), runbook actions (write, playbook-scoped), paging (write).
+- **Memory:** Incident history (feeds Part XIII), runbook versions with success rates, SLO/error-budget series.
+- **Inputs:** Alerts, telemetry, release events, capacity plans. **Outputs:** Incident executions + post-mortem drafts, SLO reports, runbook updates, capacity signals.
+- **Tools:** Observability (write); infrastructure actions per runbook (write, scoped); paging/escalation (write); KS (propose-write).
+- **Risk:** High — pre-authorized to act on production during incidents; scoped by playbook bounds. **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `INFRA-DIR`; incident coordination with `BLUE-CELL` (security incidents), `VENTURE-ORCH` (customer impact); spawns `W-OPS`.
+- **Eval:** MTTD/MTTR; SLO attainment; runbook coverage of incidents (% handled without novel action); post-mortem timeliness.
+- **Recovery:** Baseline; `SRE` failure mid-incident auto-pages humans (on-call per Part XI) — incidents never orphaned.
+- **Human approval:** Out-of-runbook production actions per matrix; G-00 available to Watchdogs above it. **Self-improve:** `EVOLVE` MAY tune alert triage and runbook synthesis; new runbooks enter the pre-approved library only via `INFRA-DIR` + (where R3-capable) human review.
+
+#### `RELEASE` — Release Agent (T3 · `ENG-DIR`)
+
+- **Purpose:** CI/CD pipeline operation, progressive rollout, automatic rollback. **Responsibilities:** Operate deploy pipelines; enforce preconditions mechanically (`QA` verdict, security scans, migration safety) — no override authority exists at T3; progressive exposure (canary→cohorts) with metric guards; automatic rollback on guard breach; release records into EL/DR trails.
+- **Authority:** A3 for the mechanics of releasing what is already authorized: the *decision* to ship a public launch is G-06's; `RELEASE` executes authorized ships. Envelope: deploy pipelines (write), production deploy surface (write, pipeline-only), rollback (write).
+- **Memory:** Release ledger (what/when/guards/outcomes), rollback history, guard-threshold versions.
+- **Inputs:** Authorized release candidates + `QA` verdicts. **Outputs:** Deployments, rollbacks, release records, guard-breach alerts.
+- **Tools:** CI/CD (write); production via pipeline identity only (write); observability (read); KS (propose-write).
+- **Risk:** High — the hand on the production tiller; contained by precondition mechanics + progressive exposure + auto-rollback.
+- **Autonomy:** **A3** (Appendix B).
+- **Comms:** Contracts from `ENG-DIR`; binding inputs from `QA`; coordination with `SRE` (deploy windows, error budgets).
+- **Eval:** Change-failure rate; rollback MTTR; precondition-bypass count (hard floor: zero); deploy lead time.
+- **Recovery:** Baseline; pipeline compromise indicators freeze deploys portfolio-wide (fail-closed) + `SEC-DIR` incident.
+- **Human approval:** G-06 for launch-class ships; per-release none once lane is authorized. **Self-improve:** `EVOLVE` MAY tune rollout pacing and guard thresholds within `ENG-DIR`-approved bounds; MUST NOT tune precondition enforcement.
+
+#### `PRICER` — Pricing Analyst (T3 · `SALES-DIR`)
+
+- **Purpose:** Price research, elasticity experiments, pricing proposals. **Responsibilities:** Willingness-to-pay research; elasticity experiments on *non-live* surfaces autonomously (surveys, test cells) and live-experiment *designs* for approval; pricing proposals with margin/volume scenarios (with `FIN-MODEL`, `UNIT-ECON`); discount-structure analysis for `DEALDESK` policy.
+- **Authority:** **A1 for anything touching live prices** — live price changes are R3 (Part 0 §5: pricing changes for live customers) requiring named-human approval per the matrix; research is R1. Envelope: pricing research tools, test surfaces, analytics.
+- **Memory:** Price-test archive, elasticity estimates with confidence, proposal ledger with outcomes.
+- **Inputs:** Pricing questions from `SALES-DIR`/`VENTURE-ORCH`; unit economics; competitive pricing from `COMP-INTEL`. **Outputs:** Research reports, experiment designs, pricing proposals (human-approved before any live effect).
+- **Tools:** Survey/test platforms (write, non-live); billing configuration (**no access** — live prices change through human-approved change requests executed via `RELEASE` lanes); analytics (read); KS (propose-write).
+- **Risk:** Medium — pricing errors burn trust and revenue; A1 on live changes contains it. **Autonomy:** **A1 (live price changes are R3)** (Appendix B).
+- **Comms:** Contracts from `SALES-DIR`; lateral with `FIN-MODEL`, `UNIT-ECON`, `COMP-INTEL`, `DEALDESK`.
+- **Eval:** Elasticity-estimate accuracy vs. realized response; proposal adoption rate; revenue impact of adopted proposals vs. projection.
+- **Recovery:** Baseline; a live pricing error triggers immediate human-approved revert + customer-comms via G-17 lane.
+- **Human approval:** Named human (matrix) for live changes; G-10 where pricing binds large contracts. **Self-improve:** `EVOLVE` MAY tune research instruments and scenario modeling.
+
+#### `ADS` — Paid Acquisition Agent (T3 · `GROWTH-DIR`)
+
+- **Purpose:** Campaign creation/optimization within channel budget envelopes. **Responsibilities:** Build/operate campaigns on approved channels; creative rotation from `MKT-DIR`-approved template pool; bid/budget optimization inside per-channel caps; conversion instrumentation with `INSIGHT`; kill-switch compliance (stop-losses fire mechanically).
+- **Authority:** A2: full campaign mechanics within the channel envelope granted by `GROWTH-DIR` (itself inside G-06's GTM envelope); new channels, off-template creative (G-17), or cap raises queue. Envelope: ad platform APIs (write, spend-capped per channel per day), creative pool (read), analytics (read).
+- **Memory:** Campaign archive with spend/outcome, creative-performance ledger, platform-quirk KIs.
+- **Inputs:** Channel plans + caps; creative pool; funnel data. **Outputs:** Live campaigns, optimization logs, performance reports, cap-utilization alerts.
+- **Tools:** Ad platform APIs (write, the single most spend-capable T3 write surface — hence hard daily caps enforced Kernel-side, not platform-side); analytics (read); KS (propose-write).
+- **Risk:** High — spends real money publicly, continuously; dual containment (Kernel caps + platform budgets) because platform-side caps alone are a single point of failure.
+- **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `GROWTH-DIR`; creative from `MKT-DIR` pool; test traffic for `VALIDATOR`.
+- **Eval:** CAC vs. guardrail per channel; spend-pacing accuracy; creative-test velocity; cap-breach count (hard floor: zero Kernel-side breaches).
+- **Recovery:** Baseline; anomalous spend pattern → automatic campaign pause (Watchdog-independent) + escalation; platform API failure fails paused, not open.
+- **Human approval:** G-06 envelope; G-17 for off-template public creative. **Self-improve:** `EVOLVE` MAY tune bidding heuristics and creative-selection models; MUST NOT tune spend caps.
+
+#### `CONTENT` — Content Agent (T3 · `MKT-DIR`)
+
+- **Purpose:** SEO/content production, editorial calendar execution. **Responsibilities:** Produce content per calendar within approved messaging templates and claims register (no unapproved product/legal claims — mechanical check against `MKT-DIR` registry); SEO program execution; content performance loops; publish only to pre-approved venues.
+- **Authority:** A2: template-conformant content to approved venues; anything beyond templates or venues is R3 → G-17. Envelope: CMS/publishing (write, venue-allowlisted), SEO tools, claims register (read).
+- **Memory:** Content inventory + performance, claims-check log, SEO position series.
+- **Inputs:** Editorial calendar, briefs, `PROD-DIR`/`COMP-INTEL` inputs. **Outputs:** Published content, performance reports, calendar status.
+- **Tools:** CMS (write, allowlisted venues); SEO/analytics (read); generation tooling (write); KS (propose-write).
+- **Risk:** Medium — public brand surface at volume; template + venue allowlists cap it. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `MKT-DIR`; briefs coordinate with `GROWTH-DIR` (SEO demand), `SALES-DIR` (enablement).
+- **Eval:** Organic traffic/pipeline contribution; content quality audits (human-sampled per A2 cadence); claims-check violation rate (hard floor: zero published); calendar adherence.
+- **Recovery:** Baseline; a published claims violation → immediate unpublish + G-17 comms review + registry-gap KI.
+- **Human approval:** G-17 beyond templates/venues; weekly A2 batch sampling. **Self-improve:** `EVOLVE` MAY tune drafting prompts, SEO targeting, quality classifiers.
+
+#### `LIFECYCLE` — Lifecycle Marketing Agent (T3 · `MKT-DIR`)
+
+- **Purpose:** Email/CRM flows, onboarding sequences, churn-save campaigns. **Responsibilities:** Design/operate lifecycle flows within approved templates + consent classes; segmentation per approved data classes; churn-save execution (strategy from `CS-DIR`); deliverability hygiene; suppression-list sanctity (never message opted-out users — mechanical).
+- **Authority:** A2 within messaging envelope: templated flows to consented recipients; new segments using new data classes → G-18; beyond-template sends → G-17. Envelope: ESP/CRM (write, template-locked), segment data (read, class-limited), `W-OUTREACH` quota.
+- **Memory:** Flow registry + performance, suppression audit log, experiment archive.
+- **Inputs:** Flow strategies from `MKT-DIR`/`CS-DIR`; segments; product events. **Outputs:** Live flows, campaign results, deliverability reports.
+- **Tools:** ESP/CRM APIs (write, templated + suppression-checked Kernel-side); analytics (read); KS (propose-write).
+- **Risk:** Medium — high-volume direct customer contact; consent/template mechanics cap it. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `MKT-DIR` (primary) and `CS-DIR` (retention motions — RACI per Part III); spawns `W-OUTREACH`.
+- **Eval:** Flow conversion vs. baseline; unsubscribe/complaint rates vs. thresholds; suppression violations (hard floor: zero); deliverability health.
+- **Recovery:** Baseline; complaint-rate spike auto-pauses the offending flow (mechanical) before escalation.
+- **Human approval:** G-17/G-18 as triggered; A2 batch review. **Self-improve:** `EVOLVE` MAY tune flow logic, send-time models, copy variants within templates.
+
+#### `OUTBOUND` — Outbound Prospector (T3 · `SALES-DIR`)
+
+- **Purpose:** ICP list building, personalized outreach within approved messaging envelope. **Responsibilities:** Build ICP lists from approved data sources (G-18 for new sources); personalize within message templates (personalization fields, not free composition — bounded generation); sequence execution via `W-OUTREACH`; response triage and handoff to `SALES-DIR` pipeline; sender-reputation stewardship.
+- **Authority:** A2 within messaging envelope; identity is always disclosed (Part XI ethics — no impersonation, no false pretenses, mechanical template control). Envelope: prospect data (class-limited), sequencing tools (write, templated), `W-OUTREACH` quota, daily send caps.
+- **Memory:** ICP models with conversion feedback, outreach ledger (every touch logged), template performance.
+- **Inputs:** ICP definitions, target accounts, templates. **Outputs:** Qualified responses handed off, list-quality reports, sequence analytics.
+- **Tools:** Prospecting databases (read, approved sources); sequencing/email (write, template-locked + capped); CRM (write); KS (propose-write).
+- **Risk:** Medium — brand exposure at volume + personal-data handling; template/cap/consent mechanics contain. **Autonomy:** **A2** (Appendix B).
+- **Comms:** Contracts from `SALES-DIR`; spawns `W-OUTREACH`; handoffs to `DEALDESK` pipeline.
+- **Eval:** Qualified-meeting rate per 100 touches; spam-complaint rate vs. threshold; list accuracy (bounce/mis-ICP rate); template-compliance (hard floor).
+- **Recovery:** Baseline; reputation-damage indicators (blocklisting) auto-pause sending domain-wide.
+- **Human approval:** G-18 for new data sources; G-17 if outreach crosses into public/PR territory; A2 batch review. **Self-improve:** `EVOLVE` MAY tune ICP scoring and personalization-field selection; MUST NOT unlock free-composition sending.
+
+<!-- CONTINUE-T3B -->
+
 
 
