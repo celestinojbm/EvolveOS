@@ -1,0 +1,30 @@
+name: spec-consistency
+
+# Guards the EvolveOS specification against silent degradation.
+# Standard-library Python only -- no dependency installation step.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Spec consistency (files, gates, agents, taxonomies, tables)
+        run: python scripts/check_spec_consistency.py
+
+      - name: Markdown links resolve
+        run: python scripts/check_markdown_links.py
+
+      - name: No unfinished-work placeholders
+        run: python scripts/check_no_placeholders.py
+
+      - name: Fixture tests (each check fires on a broken fixture)
+        run: python scripts/test_checks.py

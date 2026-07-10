@@ -48,6 +48,9 @@ The specification is converted into an executable plan under [`docs/`](docs/):
 | [Phase 0 Backlog](docs/PHASE_0_BACKLOG.md) | Foundation — 12 issues ([#2–#13](https://github.com/celestinojbm/EvolveOS/issues)) |
 | [Phase 1 Backlog](docs/PHASE_1_BACKLOG.md) | Manual Operating System — 10 issues ([#14–#23](https://github.com/celestinojbm/EvolveOS/issues)) |
 | [Architecture Decisions](docs/ARCHITECTURE_DECISIONS.md) | Build ADRs (Minimal Kernel, Postgres-only, agents-as-tools, gates-as-data, …) with revisit triggers |
+| [Consistency Checks](docs/CONSISTENCY_CHECKS.md) | What CI validates, how to run it locally, and how to extend it — Phase 0 issue [#2](https://github.com/celestinojbm/EvolveOS/issues/2) |
+
+**Continuous integration.** Every push and pull request runs `scripts/` spec-consistency checks (standard-library Python, no dependencies): expected files exist, gate citations stay within `G-00…G-18`, agent references resolve to Appendix B, canonical taxonomies are complete, internal links resolve, and no placeholders leak in. Run them locally with `python scripts/run_all_checks.py`. See [Consistency Checks](docs/CONSISTENCY_CHECKS.md).
 
 **Build rule of thumb:** the spec describes the destination; the build follows the pathfinder rule (revision XV-12) — one venture, eight gates, seven agent roles, one database, humans approving everything that matters.
 
