@@ -1,0 +1,8 @@
+{
+  "id": "DR-2027-002",
+  "title": "Invalid example: bad reversibility class, missing decision, stray field",
+  "proposer": "FIN-MODEL",
+  "reversibility_class": "R5",
+  "status": "approved",
+  "unexpected_field": "additionalProperties is false, so this is rejected"
+}

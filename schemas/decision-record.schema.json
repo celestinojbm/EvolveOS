@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evolveos.spec/schemas/decision-record.schema.json",
+  "title": "EvolveOS Decision Record",
+  "version": "0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "proposer", "reversibility_class", "decision", "status"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^DR-\\d{4}-\\d+$"},
+    "title": {"type": "string", "minLength": 1},
+    "proposer": {"type": "string"},
+    "approver": {"type": ["string", "null"]},
+    "gate_id": {"type": ["string", "null"], "pattern": "^G-\\d{2}$"},
+    "reversibility_class": {"type": "string", "enum": ["R1", "R2", "R3", "R4"]},
+    "autonomy_level_involved": {"type": ["string", "null"], "pattern": "^A[0-4]$"},
+    "decision": {"type": "string", "minLength": 1},
+    "rationale": {"type": "string"},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "evidence_links": {"type": "array", "items": {"type": "string"}},
+    "risks": {"type": "array", "items": {"type": "string"}},
+    "kill_criteria": {"type": "array", "items": {"type": "string"}},
+    "rollback_plan": {"type": ["string", "null"]},
+    "status": {"type": "string", "enum": ["proposed", "approved", "rejected", "executed", "rolled_back", "superseded"]},
+    "created_at": {"type": ["string", "null"]},
+    "decided_at": {"type": ["string", "null"]},
+    "human_approval": {"type": ["object", "null"]}
+  }
+}

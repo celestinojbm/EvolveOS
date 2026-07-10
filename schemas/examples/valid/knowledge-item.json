@@ -1,0 +1,14 @@
+{
+  "id": "KI-2027-014",
+  "title": "SMB bookkeepers will not pay above $40/mo for automated categorization",
+  "type": "market-fact",
+  "provenance": ["interview:2027-02-08:prospect-07", "interview:2027-02-09:prospect-11"],
+  "confidence": 0.55,
+  "expires_at": "2027-08-08",
+  "review_at": "2027-05-08",
+  "source_links": ["evidence/interview-corpus"],
+  "validation_status": "validated",
+  "owner": "CURATOR",
+  "privacy_class": "PC-1",
+  "related_decision_records": ["DR-2027-001"]
+}

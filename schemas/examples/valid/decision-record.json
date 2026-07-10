@@ -1,0 +1,20 @@
+{
+  "id": "DR-2027-001",
+  "title": "Advance venture V-2027-004 through G-03 validation verdict",
+  "proposer": "VALIDATOR",
+  "approver": "PORTFOLIO",
+  "gate_id": "G-03",
+  "reversibility_class": "R2",
+  "autonomy_level_involved": "A2",
+  "decision": "Proceed to Customer Discovery; validation cleared the pre-registered kill criteria.",
+  "rationale": "Landing test conversion 4.1% vs 2.0% threshold; 12 of 15 interviews confirmed the pain.",
+  "assumptions": ["Interview sample is representative of the ICP"],
+  "evidence_links": ["evidence/landing-test-summary", "evidence/interview-corpus"],
+  "risks": ["Conversion may not hold at larger spend"],
+  "kill_criteria": ["Discovery activation < 25% after 20 conversations"],
+  "rollback_plan": "Archive the venture; no external commitments were made.",
+  "status": "approved",
+  "created_at": "2027-02-10T14:00:00Z",
+  "decided_at": "2027-02-12T09:30:00Z",
+  "human_approval": {"approver": "portfolio-review-lead", "method": "totp", "approved_at": "2027-02-12T09:30:00Z"}
+}

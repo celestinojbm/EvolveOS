@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evolveos.spec/schemas/task-contract.schema.json",
+  "title": "EvolveOS Task Contract",
+  "version": "0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "issuer", "acceptor", "status", "body"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^TC-\\d{4}-\\d+$"},
+    "issuer": {"type": "string", "minLength": 1},
+    "acceptor": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["proposed", "accepted", "declined", "counter", "in_progress", "completed", "escalated"]},
+    "decline_reason": {"type": ["string", "null"], "enum": ["over_capacity", "out_of_competence", "envelope_insufficient", "conflict", null]},
+    "created_at": {"type": ["string", "null"]},
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective", "constraints", "envelope_slice", "deadline", "acceptance_criteria", "escalation_path"],
+      "properties": {
+        "objective": {"type": "string", "minLength": 1},
+        "constraints": {"type": "array", "items": {"type": "string"}},
+        "envelope_slice": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reversibility_ceiling"],
+          "properties": {
+            "spend_cap": {"type": ["number", "null"], "minimum": 0},
+            "tool_allowlist": {"type": "array", "items": {"type": "string"}},
+            "data_classes": {"type": "array", "items": {"type": "string", "enum": ["C0", "C1", "C2", "C3", "C4"]}},
+            "action_types": {"type": "array", "items": {"type": "string"}},
+            "rate_limits": {"type": ["string", "null"]},
+            "reversibility_ceiling": {"type": "string", "enum": ["R1", "R2", "R3", "R4"]}
+          }
+        },
+        "deadline": {"type": "string", "minLength": 1},
+        "checkpoint_schedule": {"type": "array", "items": {"type": "string"}},
+        "acceptance_criteria": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "escalation_path": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "kill_criteria": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
