@@ -53,4 +53,4 @@ The specification is converted into an executable plan under [`docs/`](docs/):
 
 ## Status
 
-Draft v0.1 — founding specification complete (Parts 0–XV + appendices) and converted to an executable Phase 0–3 plan. The Constitutional Layer (Parts 0, X, XI, Appendix C) is amendable only through gate G-16; its thresholds await founding human ratification (see [ADR-006](docs/ARCHITECTURE_DECISIONS.md)).
+Draft v0.1 — founding specification complete (Parts 0–XV + appendices) and converted to an executable Phase 0–3 plan. The Constitutional Layer (Parts 0, X, XI, Appendix C) is amendable through gate G-16 — and, until the first venture reaches G-07, through the bounded human-only **founding amendment mode** (`spec/00-overview.md` §4.1, operationalized in [`docs/FOUNDING_RATIFICATION_PACK.md`](docs/FOUNDING_RATIFICATION_PACK.md)). Its thresholds await founding human ratification (see [ADR-006](docs/ARCHITECTURE_DECISIONS.md)).

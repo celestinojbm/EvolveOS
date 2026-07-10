@@ -74,7 +74,7 @@
 **Dependencies.** P0-5, P0-3.
 
 ### P0-10 · Founding Ratification Pack + real-money feature flag
-**Labels:** `phase-0`, `governance`, `constitutional` · **Files:** `docs/RATIFICATION_PACK.md`, `app/lib/flags.ts`
+**Labels:** `phase-0`, `governance`, `constitutional` · **Files:** [`docs/FOUNDING_RATIFICATION_PACK.md`](FOUNDING_RATIFICATION_PACK.md) (draft template already in the repo — finalize and sign here), `app/lib/flags.ts`
 **Description.** Per ADR-006: a signable document containing (a) pathfinder-scale threshold table (replacing Appendix C's $10M-scale amounts for this deployment, without amending the spec), (b) role assignments (Portfolio Review lead, operators, human CURATOR), (c) the manual G-00 procedure, (d) the MVP non-scope list as binding. Signature = named-human event per signer. `real_money` flag readable only true when all signature events exist.
 **Acceptance.** Flag is false on a fresh DB; flips only via signature events; CI test covers the gate.
 **Dependencies.** P0-6, P0-9.

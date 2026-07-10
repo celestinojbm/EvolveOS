@@ -56,6 +56,17 @@ Per RFC 2119: **MUST**, **MUST NOT**, **SHALL** are binding requirements; **SHOU
 
 > **Revision (XV-3):** A document MAY carry mixed change classes only by explicit section-level designation declared in its header; designated protected sections are Constitutional Layer content amendable only via G-16, change control tracks class at section level, undesignated content inherits the document's base class, ambiguity resolves to the higher class, and moving content between documents never changes its class. Ratified v0.1 mixed-class designations: Part VII header carve-outs, Part VIII header carve-outs, Part XII §15, Part XIV §11 (D1/D5/D7) and §13.4. See Part XV (`15-critique-and-revisions.md`) §4.
 
+### 4.1 Founding amendment mode (bootstrap)
+
+The §4 rule has a bootstrap gap: G-16 requires a Tech & Safety Committee quorum (Appendix C), and that committee cannot be seated until the first venture reaches gate G-07 (entity formation, requiring external independents per Part XI). Between founding and the first G-07 the Constitutional Layer would otherwise be unamendable — including the first ratification of the **[ASSUMPTION]** dollar thresholds (§5) and any textual correction to this layer. To close the gap without letting the AI amend the layer that constrains it, a bounded, temporary, **human-only founding amendment mode** applies from founding until the first G-07. Its operational detail lives in the Founding Ratification Pack (`docs/FOUNDING_RATIFICATION_PACK.md`).
+
+- **Who.** Only the named founding signatories listed in the Pack, acting by explicit human signature. No agent or automated process may invoke this mode.
+- **What it MAY amend (provisionally).** The pathfinder-scale dollar thresholds; role and accountable-officer assignments; the authorized MVP-scale security substitutions; the list of founding signatories; and textual corrections to the Constitutional Layer.
+- **What it MUST NOT do (entrenched even against this mode).** It MUST NOT weaken the autonomy–reversibility matrix (§6); MUST NOT raise any agent's autonomy ceiling; MUST NOT enable real-money operation before the Pack is signed; MUST NOT bypass G-00 or weaken the human-mandatory decision set (Part XI); MUST NOT grant any agent external credentials during Phases 0–2; and MUST NOT amend this founding amendment mode itself — its scope, guardrails, and termination trigger change only via G-16.
+- **How recorded.** Each founding amendment MUST be a human signature event in the append-only event log (hardware-key-signed, or via the authorized MVP second-factor substitution) with an attached Decision Record marked `provisional-founding`, recording the signer, the change, the rationale, and an explicit attestation that no entrenched guardrail above is touched.
+- **Termination.** The mode auto-terminates at the first G-07; thereafter only G-16 applies and the mode cannot be re-entered. Every `provisional-founding` amendment still in force is placed on the first Tech & Safety Committee's mandatory agenda to be ratified via G-16 or reverted.
+- **Rationale.** This mode is Constitutional Layer content, established by the founders' ratification of this specification (the constituent act). It fails closed: human-only, single-window, self-non-extending, and strictly narrower than G-16.
+
 ## 5. Canonical taxonomy 1 — Reversibility classes (R1–R4)
 
 Every action, decision, and change in EvolveOS MUST carry a reversibility class. The class is determined by the **worst-case cost and feasibility of undoing the action**, not by its expected outcome.
