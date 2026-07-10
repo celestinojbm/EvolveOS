@@ -7,3 +7,19 @@ venv/
 
 # Review/scratch
 scripts/tmp_review/
+
+# Node / pnpm (app scaffold, issue #5)
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Generated TypeScript types (derived from schemas/*.schema.json via `pnpm typegen`)
+app/src/generated/
+
+# Local Postgres data and env
+ops/.pgdata/
+.env
+.env.local
+
+# OS / editor noise
+.DS_Store
