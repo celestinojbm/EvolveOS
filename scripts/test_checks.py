@@ -70,14 +70,24 @@ def test_agent_ids():
         good = write(d, "good.md", "`PRIME` delegates to `SCOUT` and `RED-CELL`.\n")
         macro = write(d, "macro.md", "Venture enters `SHUTDOWN` then `ARCHIVED`.\n")
         struct = write(d, "struct.md", "See `RISK-ORG-01`, `V-2027-004`, `G-07`, `CEO-1`.\n")
-        acro = write(d, "acro.md", "Store as `JSON`, encrypt per `GDPR`, auth via `OIDC`.\n")
+        acro = write(d, "acro.md", "Store as `JSON`, encrypt per `GDPR`, via `OIDC`, `OTLP`, `SVID`.\n")
+        vocab = write(d, "vocab.md", "This `MUST` hold; the `DECISION` is `ADOPTED`.\n")
         fenced = write(d, "fenced.md", "```json\n{ \"agent\": \"`MADE-UP-DIR`\" }\n```\n")
+        typo_mm = write(d, "typo.md", "The `COMMS-DIR` and `DEALDDESK` and `SUMMARIZER`.\n")
+        riskcat = write(d, "riskcat.md", "Category `RISK-ECON` and `RISK-AI` and item `RISK-ORG-01`.\n")
+        riskbad = write(d, "riskbad.md", "The `RISK-FOO` agent triages it.\n")
+        placeholder = write(d, "ph.md", "IDs shaped `YYYY-MM` and `V-YYYY-SEQ`.\n")
         expect(C.check_agent_ids([bad], registry) != [], "agent-ids: fires on invented FOO-DIR")
         expect(C.check_agent_ids([good], registry) == [], "agent-ids: clean on registry IDs")
         expect(C.check_agent_ids([macro], registry) == [], "agent-ids: ignores pipeline macro-states")
         expect(C.check_agent_ids([struct], registry) == [], "agent-ids: ignores structured namespaces")
         expect(C.check_agent_ids([acro], registry) == [], "agent-ids: ignores technical acronyms")
+        expect(C.check_agent_ids([vocab], registry) == [], "agent-ids: ignores spec vocabulary words")
         expect(C.check_agent_ids([fenced], registry) == [], "agent-ids: ignores tokens in fenced blocks")
+        expect(C.check_agent_ids([typo_mm], registry) != [], "agent-ids: fires on MM/DD-containing invented IDs")
+        expect(C.check_agent_ids([riskcat], registry) == [], "agent-ids: ignores risk category codes")
+        expect(C.check_agent_ids([riskbad], registry) != [], "agent-ids: fires on invented RISK-prefixed ID")
+        expect(C.check_agent_ids([placeholder], registry) == [], "agent-ids: ignores format placeholders")
     real_registry = S.load_agent_registry(os.path.join(S.SPEC_DIR, "appendix-b-agent-registry.md"))
     expect(C.check_agent_ids(S.markdown_files(S.SPEC_DIR), real_registry) == [],
            "agent-ids: real tree passes")
@@ -149,10 +159,27 @@ def test_placeholders():
            "placeholders: real tree passes")
 
 
+def test_fenced_blocks():
+    with tempfile.TemporaryDirectory() as d:
+        unterminated = write(d, "u.md", "Intro\n```python\nx = 1\n## still fenced\n")
+        balanced = write(d, "b.md", "Intro\n```python\nx = 1\n```\nDone\n")
+        expect(C.check_fenced_blocks([unterminated]) != [], "fenced-blocks: fires on unterminated fence")
+        expect(C.check_fenced_blocks([balanced]) == [], "fenced-blocks: clean on balanced fence")
+    expect(C.check_fenced_blocks(S.default_content_files()) == [],
+           "fenced-blocks: real tree passes")
+    # strip_fenced_blocks unit behavior: nested 4-backtick block does not leak,
+    # and an unterminated fence blanks to EOF (surfaced by check_fenced_blocks).
+    nested = ["````markdown", "```", "The `GHOST-DIR` agent", "```", "````", "after"]
+    stripped = S.strip_fenced_blocks(nested)
+    expect("GHOST-DIR" not in "".join(stripped), "strip: nested 4-backtick block is fully blanked")
+    expect(stripped[-1] == "after", "strip: content after a closed nested block is preserved")
+
+
 def main():
     for fn in (
         test_expected_files, test_gate_range, test_agent_ids, test_taxonomies,
-        test_table_integrity, test_markdown_links, test_placeholders,
+        test_table_integrity, test_fenced_blocks, test_markdown_links,
+        test_placeholders,
     ):
         fn()
     print()

@@ -72,9 +72,28 @@ def check_agent_ids(files, registry_ids):
                     continue
                 violations.append(
                     f"{S.rel(path)}:{i}: `{tok}` looks like an agent ID but is "
-                    f"not in Appendix B (typo, or add it to the registry / an "
-                    f"exclusion namespace in speclib.py)"
+                    f"not in Appendix B. If it is a real agent, add it to the "
+                    f"registry; if it is a standard/acronym or other identifier, "
+                    f"add it to TECH_ACRONYMS / a non-agent namespace in speclib.py"
                 )
+    return violations
+
+
+def check_fenced_blocks(files):
+    """Flag an unterminated code fence.
+
+    An unterminated ``` fence would otherwise cause strip_fenced_blocks to blank
+    the rest of the file, silently blinding the placeholder / link / agent /
+    table checks. Surfacing it as its own violation keeps that failure loud.
+    """
+    violations = []
+    for path in files:
+        line_no = S.unterminated_fence_line(S.read_lines(path))
+        if line_no is not None:
+            violations.append(
+                f"{S.rel(path)}:{line_no}: unterminated code fence "
+                f"(add the closing fence; an open fence blanks the rest of the file)"
+            )
     return violations
 
 
@@ -147,6 +166,7 @@ def run():
 
     results = {
         "expected files": check_expected_files(S.SPEC_DIR, S.EXPECTED_SPEC_FILES),
+        "fenced blocks": check_fenced_blocks(content_files),
         "gate range": check_gate_range(content_files),
         "agent references": check_agent_ids(spec_files, registry_ids),
         "taxonomies": check_taxonomies(S.SPEC_DIR, S.TAXONOMIES),

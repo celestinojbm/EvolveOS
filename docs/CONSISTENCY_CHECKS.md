@@ -10,7 +10,7 @@ CI runs on every `push` and `pull_request` (workflow: `.github/workflows/spec-co
 
 | Check | Script | What it enforces |
 |---|---|---|
-| Spec consistency | `scripts/check_spec_consistency.py` | (1) all 19 expected spec files exist and there are no orphan `spec/*.md`; (2) every gate citation `G-NN` is within `G-00…G-18`; (3) every backticked agent reference resolves to the Appendix B registry; (4) every canonical taxonomy is fully present in its owning document; (5) no blockquote — single- or multi-line — splits a markdown table |
+| Spec consistency | `scripts/check_spec_consistency.py` | (1) all 19 expected spec files exist and there are no orphan `spec/*.md`; (2) no unterminated code fence; (3) every gate citation `G-NN` is within `G-00…G-18`; (4) every backticked agent reference resolves to the Appendix B registry; (5) every canonical taxonomy is fully present in its owning document; (6) no blockquote — single- or multi-line — splits a markdown table |
 | Markdown links | `scripts/check_markdown_links.py` | every internal relative link in `spec/`, `docs/`, and `README.md` resolves to a real file |
 | No placeholders | `scripts/check_no_placeholders.py` | no `TODO` / `TBD` / `FIXME` / `lorem ipsum` leaks into a finished document |
 | Fixture tests | `scripts/test_checks.py` | each check above actually **fires** on a deliberately-broken fixture (and passes on the real tree) |
@@ -53,12 +53,14 @@ All extension points live in `scripts/speclib.py`:
 - **Add a decision gate** (one numbered beyond the current maximum) → raise `GATE_MAX`, and add the new gate to Appendix C. The gate-range and taxonomy checks read these automatically.
 - **Add an agent** → add its row to `spec/appendix-b-agent-registry.md`. The registry is parsed at runtime; no code change is needed. New citations of that ID then pass.
 - **Introduce a new non-agent ID family** (e.g. a new risk category prefix, a new critique-persona code, a new venture-ID shape) → add a pattern to `_NON_AGENT_PATTERNS`, or a literal to `_PIPELINE_MACRO_STATES`, in `speclib.py`. Otherwise the agent check will flag those tokens as suspected invented agent IDs.
-- **Backtick a new technical acronym** (e.g. a standard or format like `` `GDPR` `` / `` `JSON` ``) → add it to `TECH_ACRONYMS` in `speclib.py` so it is not mistaken for an invented agent ID. (Acronyms of 3 characters or fewer are already ignored by shape.)
+- **Backtick a new technical acronym or spec keyword** (e.g. a standard like `` `GDPR` ``, or a controlled-vocabulary word like `` `MUST` ``) → add it to `TECH_ACRONYMS` or `_SPEC_VOCABULARY` in `speclib.py` so it is not mistaken for an invented agent ID. (Acronyms of 3 characters or fewer are already ignored by shape.) The check's error message names both extension points.
 - **Add a taxonomy** → add an entry to `TAXONOMIES` (label list + owning file).
 
 ### Fenced code blocks
 
-The placeholder, link, agent-reference and table-integrity checks blank fenced code blocks (triple-backtick or `~~~`) before scanning, so illustrative examples — an unfinished-work marker in a shell snippet, a link inside a JSON payload, a backticked token, or a table anti-pattern shown in a fenced example — do not produce false failures. The **gate-range** check is the deliberate exception: a gate cited even inside an example is treated as a real citation, because an out-of-range gate anywhere signals a genuine inconsistency.
+The placeholder, link, agent-reference and table-integrity checks blank fenced code blocks (triple-backtick or `~~~`) before scanning, so illustrative examples — an unfinished-work marker in a shell snippet, a link inside a JSON payload, a backticked token, or a table anti-pattern shown in a fenced example — do not produce false failures. Fence matching follows CommonMark: a closing fence uses the same character, a run at least as long as the opener, and no info string, so a four-backtick block that wraps a three-backtick example is handled correctly. The **gate-range** check is the deliberate exception: a gate cited even inside an example is treated as a real citation, because an out-of-range gate anywhere signals a genuine inconsistency.
+
+An **unterminated** code fence is caught as its own violation (the "no unterminated code fence" check) rather than silently blanking the rest of the file — so a forgotten closing fence fails CI loudly instead of quietly disabling the prose checks.
 
 ## Known limitations (deliberate)
 

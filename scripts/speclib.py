@@ -80,14 +80,21 @@ AGENT_CANDIDATE_RE = re.compile(r"^(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+|[A-Z][A-Z0-9
 # introduced in the spec (e.g. a new risk category or critique persona).
 _NON_AGENT_PATTERNS = [
     r"^G-\d\d$",                                # gate IDs (range-checked elsewhere)
-    r"^RISK-[A-Z]+-\d+$",                       # risk-register IDs (Part XIII)
+    # Risk-register IDs (Part XIII): a fixed set of category codes, optionally
+    # numbered. Enumerated (not RISK-[A-Z]+) so an invented RISK-prefixed agent
+    # such as a typo of RISK-DIR is still flagged.
+    r"^RISK-(ECON|ORG|TECH|HUM|SEC|MKT|SPOF|EMRG|UNK|AI)(-\d+)?$",
     r"^(CEO|YC|ECON|DSA|AIR|SEC|VC|LAW)-\d+$",  # Part XV criticism IDs
+    r"^MOAT-\d+$",                              # moat IDs (Part I)
     r"^V-\d{4}-\d+$",                           # venture ID examples
     r"^DR-\d{4}-\d+$",                          # decision-record IDs
     r"^XV-\d+$",                                # revision IDs
     r"^ADR-\d+$",                               # architecture decision records
     r"^M\d+[a-z]?$",                            # milestone IDs (docs)
-    r".*(YYYY|MM|DD|SEQ).*",                    # format placeholders
+    # Format placeholders, anchored to the placeholder token shape so it cannot
+    # swallow ordinary tokens that merely CONTAIN MM/DD/etc. (e.g. COMMS-DIR).
+    r"^(?:[A-Z]+-)?(?:YYYY|MM|DD|SEQ|NN|X{2,})(?:[-/](?:YYYY|MM|DD|SEQ|NN|X{2,}|\d+))*$",
+    r"^[IVXLCDM]{2,}$",                         # roman numerals (Part references)
     r"^E-CF$",                                  # evidence tier (revision XV-10)
 ]
 _NON_AGENT_RE = [re.compile(p) for p in _NON_AGENT_PATTERNS]
@@ -107,16 +114,31 @@ _PIPELINE_MACRO_STATES = {
 # for an invented agent ID. Add to this set as new acronyms appear.
 TECH_ACRONYMS = frozenset({
     "JSON", "YAML", "TOML", "HTML", "HTTP", "HTTPS", "REST", "GRPC", "GRAPHQL",
-    "SOAP", "OIDC", "SAML", "OAUTH", "WEBAUTHN", "TOTP", "MTLS", "SPIFFE",
-    "SPIRE", "GDPR", "HIPAA", "CCPA", "SOC2", "SOX", "PCI-DSS", "FEDRAMP",
-    "UUID", "ULID", "CRUD", "ACID", "SIEM", "SOAR", "SBOM", "SLSA", "OODA",
+    "SOAP", "OIDC", "SAML", "OAUTH", "WEBAUTHN", "FIDO2", "TOTP", "MTLS",
+    "SPIFFE", "SPIRE", "SVID", "GDPR", "HIPAA", "CCPA", "SOC2", "SOX",
+    "PCI-DSS", "FEDRAMP", "FIPS", "ISO27001", "SLSA", "SLSA-L3", "CIDR",
+    "UUID", "ULID", "CRUD", "ACID", "OLTP", "OTLP", "SIEM", "SOAR", "SBOM",
+    "SAST", "DAST", "OODA", "SDLC", "AMQP", "MTTR", "MTTD", "PITR",
     "POSTGRES", "REDIS", "KAFKA", "GITHUB", "OPENTOFU", "OPENTELEMETRY",
     "TERRAFORM", "KUBERNETES", "SLIS", "SLOS", "SLAS", "RTOS", "RPOS",
-    "SCIM", "LDAP", "IMAP", "SMTP", "REGO", "COBOL", "NGINX", "ISO27001",
+    "SCIM", "LDAP", "IMAP", "SMTP", "REGO", "COBOL", "NGINX",
+    # Finance / operating acronyms used in the spec
+    "EBITDA", "COGS", "MOIC", "CSAT", "MAPE", "RACI", "JTBD", "SPOF", "HRIS",
+})
+
+# The specification's own controlled vocabulary (RFC-2119 keywords and the
+# marker / disposition words used throughout). These are ordinary words that
+# share the agent lexical shape; backticking one for emphasis must not read as
+# an invented agent ID.
+_SPEC_VOCABULARY = frozenset({
+    "MUST", "SHOULD", "SHALL", "OPTIONAL", "REQUIRED", "MANDATORY",
+    "ASSUMPTION", "UNCERTAIN", "DECISION", "ADOPTED", "ADOPT", "DEFERRED",
+    "REJECTED", "PARTIALLY", "CHOSEN", "TERMINAL",
 })
 
 BACKTICK_TOKEN_RE = re.compile(r"`([A-Za-z][A-Za-z0-9-]*)`")
 
+# A code fence: 3+ backticks or tildes, optionally indented. Group 1 is the run.
 _FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 
 
@@ -126,7 +148,41 @@ def is_non_agent_token(token: str) -> bool:
         return True
     if token in TECH_ACRONYMS:
         return True
+    if token in _SPEC_VOCABULARY:
+        return True
     return any(r.match(token) for r in _NON_AGENT_RE)
+
+
+def _fence_regions(lines):
+    """Scan *lines* for fenced code blocks.
+
+    Returns (regions, open_index): `regions` is a list of (start, end) inclusive
+    line indices for each closed fenced block (markers included); `open_index`
+    is the index of an opener whose fence is never closed, or None.
+
+    Closing follows CommonMark: a closing fence uses the same character as the
+    opener, a run at least as long, and carries no info string (nothing but
+    whitespace after the run). This makes a 4-backtick block that wraps a
+    3-backtick example close only on its matching 4-backtick line.
+    """
+    regions = []
+    open_index = None
+    open_char = None
+    open_len = None
+    for i, line in enumerate(lines):
+        m = _FENCE_RE.match(line)
+        if open_index is None:
+            if m:
+                run = m.group(1)
+                open_index, open_char, open_len = i, run[0], len(run)
+        else:
+            if m:
+                run = m.group(1)
+                after = line[m.end():].strip()
+                if run[0] == open_char and len(run) >= open_len and after == "":
+                    regions.append((open_index, i))
+                    open_index = open_char = open_len = None
+    return regions, open_index
 
 
 def strip_fenced_blocks(lines):
@@ -137,23 +193,24 @@ def strip_fenced_blocks(lines):
     config examples do not trip the prose-oriented checks (placeholders, links,
     agent references, table integrity). The gate-range check deliberately does
     NOT use this: a gate cited even inside an example is a real citation.
+
+    An unterminated fence blanks to EOF; that unterminated fence is separately
+    surfaced as a violation by check_fenced_blocks (Part IX consistency check)
+    so the blanking can never silently hide a real defect.
     """
-    out = []
-    fence_char = None
-    for line in lines:
-        m = _FENCE_RE.match(line)
-        if fence_char is None:
-            if m:
-                fence_char = m.group(1)[0]
-                out.append("")
-            else:
-                out.append(line)
-        else:
-            # Inside a fence: a marker of the same character closes it.
-            if m and m.group(1)[0] == fence_char:
-                fence_char = None
-            out.append("")
-    return out
+    regions, open_index = _fence_regions(lines)
+    blank = set()
+    for start, end in regions:
+        blank.update(range(start, end + 1))
+    if open_index is not None:
+        blank.update(range(open_index, len(lines)))
+    return ["" if i in blank else line for i, line in enumerate(lines)]
+
+
+def unterminated_fence_line(lines):
+    """Return the 1-based line number of an unterminated code fence, or None."""
+    _, open_index = _fence_regions(lines)
+    return None if open_index is None else open_index + 1
 
 
 def load_agent_registry(registry_path: str) -> set:
