@@ -16,13 +16,14 @@ schemas/
   decision-record.schema.json   # shape of a Decision Record (future records)
   knowledge-item.schema.json    # shape of a Knowledge Item
   event.schema.json             # shape of an append-only event
+  task-contract.schema.json     # shape of a Task Contract (Part IV §2.3)
   data/
     taxonomies.json             # R1-R4, A0-A4, G-00..G-18, PC-0..PC-3, C0-C4, P0-P4
     gates.json                  # the 19 gates as data
     agents.json                 # the 68 agents as data
   examples/
-    valid/{decision-record,knowledge-item,event}.json
-    invalid/{decision-record,knowledge-item,event}.json
+    valid/{decision-record,knowledge-item,event,task-contract}.json
+    invalid/{decision-record,knowledge-item,event,task-contract}.json
 scripts/
   schema_tools.py               # extracts the data from the spec Markdown
   validate_schemas.py           # validates + regenerates (--write)
@@ -71,14 +72,15 @@ If you add a gate numbered beyond `G-18`, also raise `GATE_MAX` in `scripts/spec
 
 ## Fixtures
 
-`schemas/examples/valid/` and `schemas/examples/invalid/` hold one valid and one deliberately-broken example each for Decision Records, Knowledge Items, and events. The invalid fixtures fail for concrete, checked reasons (a bad enum value, an out-of-range number, a missing required field, an additional property), so a regression that weakened a schema would make an invalid fixture start passing — and CI would catch it.
+`schemas/examples/valid/` and `schemas/examples/invalid/` hold one valid and one deliberately-broken example each for Decision Records, Knowledge Items, events, and Task Contracts. The invalid fixtures fail for concrete, checked reasons (a bad enum value, an out-of-range number, a missing required field, an additional property), so a regression that weakened a schema would make an invalid fixture start passing — and CI would catch it.
 
 ## Known limitations (deliberate)
 
 - **Agent capabilities are not extracted.** Appendix B does not define per-agent tool allowlists; those live in the Part IV agent cards as prose. `allowed_capabilities` / `forbidden_capabilities` are `null`. Extracting the Part IV tool lists is a candidate for a later issue.
 - **`implemented_status` is a build-scope classification, not a spec assertion.** It reflects the MVP scope (issue #4 / MVP Scope), not a normative value in the specification.
 - **The JSON-Schema validator supports a subset** of draft 2020-12 (type, enum, const, pattern, minimum, maximum, minLength, minItems, properties, required, additionalProperties, items). The schemas are written within that subset on purpose to avoid an external dependency. `format` is not enforced.
-- **Records are schemas, not stores.** The Decision Record, Knowledge Item, and event schemas define shape only; there is no database, no writer, and no runtime — those are later Phase 0/1 issues.
+- **The task contract is a shape, not a protocol.** `task-contract.schema.json` mirrors the required `body` fields of Part IV §2.3 (objective, constraints, envelope slice with a reversibility ceiling, deadline, acceptance criteria, escalation path, optional kill criteria) plus the message envelope (issuer, acceptor, status). Two rules the spec states in prose are **not machine-enforced** by this subset validator and remain conventions: the escalation path MUST terminate at a named human role, and kill criteria are mandatory for contracts advancing R2+ work. The envelope-subset invariant (§2.4) is a runtime Kernel check, not a document-shape check.
+- **Records are schemas, not stores.** The Decision Record, Knowledge Item, event, and Task Contract schemas define shape only; there is no database, no writer, and no runtime — those are later Phase 0/1 issues.
 
 ## Out of scope for this change
 

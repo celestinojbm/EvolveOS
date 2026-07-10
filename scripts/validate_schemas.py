@@ -45,6 +45,7 @@ FIXTURE_SPECS = {
     "decision-record": "decision-record.schema.json",
     "knowledge-item": "knowledge-item.schema.json",
     "event": "event.schema.json",
+    "task-contract": "task-contract.schema.json",
 }
 
 

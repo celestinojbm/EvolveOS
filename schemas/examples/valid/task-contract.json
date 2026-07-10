@@ -1,0 +1,31 @@
+{
+  "id": "TC-2027-014",
+  "issuer": "PORTFOLIO",
+  "acceptor": "VALIDATOR",
+  "status": "accepted",
+  "decline_reason": null,
+  "created_at": "2027-02-10T13:00:00Z",
+  "body": {
+    "objective": "Deliver a G-03 validation verdict for venture V-2027-004 with the pre-registered kill criteria evaluated.",
+    "constraints": [
+      "No outbound contact with real customers under the venture's own brand",
+      "Use only C0-C1 data; no personal data (C3+) without a PRIVACY hold clearance"
+    ],
+    "envelope_slice": {
+      "spend_cap": 2000,
+      "tool_allowlist": ["landing-test-runner", "interview-scheduler", "ks-read"],
+      "data_classes": ["C0", "C1"],
+      "action_types": ["research", "document", "analysis"],
+      "rate_limits": "<= 50 tool calls/hour",
+      "reversibility_ceiling": "R2"
+    },
+    "deadline": "2027-02-12T18:00:00Z",
+    "checkpoint_schedule": ["2027-02-11T12:00:00Z"],
+    "acceptance_criteria": [
+      "A validation DR exists citing landing-test conversion vs the 2.0% threshold",
+      "At least 12 customer interviews are logged with a structured pain summary"
+    ],
+    "escalation_path": ["PORTFOLIO", "portfolio-review-lead"],
+    "kill_criteria": ["Landing-test conversion < 1.0% after 1000 sessions"]
+  }
+}

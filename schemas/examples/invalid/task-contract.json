@@ -1,0 +1,16 @@
+{
+  "id": "TC-2027-015",
+  "issuer": "PORTFOLIO",
+  "acceptor": "VALIDATOR",
+  "status": "accepted",
+  "body": {
+    "objective": "Invalid example: bad reversibility ceiling, empty escalation path, missing acceptance criteria, stray field.",
+    "constraints": ["Use only C0-C1 data"],
+    "envelope_slice": {
+      "reversibility_ceiling": "R5"
+    },
+    "deadline": "2027-02-12T18:00:00Z",
+    "escalation_path": [],
+    "unexpected_field": "additionalProperties is false in body, so this is rejected"
+  }
+}
