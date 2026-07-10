@@ -1,0 +1,8 @@
+{
+  "id": "EV-01JQ8ZK3M7X2A9C4D6E8F0G1H3",
+  "timestamp": "2027-02-12T09:31:00Z",
+  "actor_type": "robot",
+  "actor_id": "portfolio-review-lead",
+  "event_type": "gate_passed",
+  "payload": {"note": "actor_type is not in the enum and the required hash is missing"}
+}

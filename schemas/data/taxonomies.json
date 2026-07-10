@@ -1,0 +1,293 @@
+{
+  "version": "0.1.0",
+  "source": "spec/ (Parts 0, VI, X, Appendix C)",
+  "taxonomies": {
+    "reversibility_classes": [
+      {
+        "id": "R1",
+        "name": "Trivially reversible",
+        "description": "Undo ≤ 1 hour of work and ≤ $1,000 cost; no external party affected",
+        "source_markdown_reference": "spec/00-overview.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "R2",
+        "name": "Reversible with effort",
+        "description": "Undo ≤ 30 days and ≤ $50,000; no binding external commitments; no public exposure",
+        "source_markdown_reference": "spec/00-overview.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "R3",
+        "name": "Costly to reverse",
+        "description": "Binding external commitments, public/brand exposure, contracts, spend $50k–$1M, individual hiring offers",
+        "source_markdown_reference": "spec/00-overview.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "R4",
+        "name": "Irreversible / existential",
+        "description": "Cannot be meaningfully undone, or failure threatens the portfolio",
+        "source_markdown_reference": "spec/00-overview.md#5",
+        "normative_status": "constitutional"
+      }
+    ],
+    "autonomy_levels": [
+      {
+        "id": "A0",
+        "name": "Advisory",
+        "description": "Agent analyses and recommends; a human performs the action",
+        "source_markdown_reference": "spec/00-overview.md#6",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "A1",
+        "name": "Human-in-the-loop",
+        "description": "Agent prepares the complete action; a named human approves each execution before it happens",
+        "source_markdown_reference": "spec/00-overview.md#6",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "A2",
+        "name": "Human-on-the-loop",
+        "description": "Agent executes within a pre-approved envelope; exceptions queue for human approval; humans review batches on a fixed cadence (≤ weekly)",
+        "source_markdown_reference": "spec/00-overview.md#6",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "A3",
+        "name": "Supervised autonomous",
+        "description": "Agent executes and adapts tactics within a policy envelope; automatic circuit breakers; humans audit post-hoc via sampling",
+        "source_markdown_reference": "spec/00-overview.md#6",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "A4",
+        "name": "Fully autonomous",
+        "description": "Agent executes, adapts, and modifies its own tactics; post-hoc audit only. Permitted only for R1 actions",
+        "source_markdown_reference": "spec/00-overview.md#6",
+        "normative_status": "constitutional"
+      }
+    ],
+    "gates": [
+      {
+        "id": "G-00",
+        "name": "Emergency Stop",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-01",
+        "name": "Opportunity Intake",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-02",
+        "name": "Research Commit",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-03",
+        "name": "Validation Verdict",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-04",
+        "name": "Prototype Commit",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-05",
+        "name": "MVP Commit",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-06",
+        "name": "Launch / GTM",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-07",
+        "name": "Venture Formation & Seed",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-08",
+        "name": "Scale Funding",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-09",
+        "name": "Hiring",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-10",
+        "name": "Major Commitment",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-11",
+        "name": "New Jurisdiction",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-12",
+        "name": "Acquisition",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-13",
+        "name": "Merger / Restructuring",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-14",
+        "name": "Exit",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-15",
+        "name": "Shutdown",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-16",
+        "name": "Constitutional Change",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-17",
+        "name": "Public Communication",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "G-18",
+        "name": "Data Use Expansion",
+        "source_markdown_reference": "spec/appendix-c-decision-gates.md",
+        "normative_status": "constitutional"
+      }
+    ],
+    "privacy_classes": [
+      {
+        "id": "PC-0",
+        "name": "Public",
+        "description": "Published info, public firmographics",
+        "source_markdown_reference": "spec/06-knowledge-system.md#8",
+        "normative_status": "normative"
+      },
+      {
+        "id": "PC-1",
+        "name": "Business-confidential",
+        "description": "Contract terms, usage aggregates, win/loss",
+        "source_markdown_reference": "spec/06-knowledge-system.md#8",
+        "normative_status": "normative"
+      },
+      {
+        "id": "PC-2",
+        "name": "Personal data",
+        "description": "Names, contact details, role-level person records, support transcripts",
+        "source_markdown_reference": "spec/06-knowledge-system.md#8",
+        "normative_status": "normative"
+      },
+      {
+        "id": "PC-3",
+        "name": "Sensitive personal / regulated",
+        "description": "Payment data, health-adjacent, minors, special categories",
+        "source_markdown_reference": "spec/06-knowledge-system.md#8",
+        "normative_status": "normative"
+      }
+    ],
+    "data_classes": [
+      {
+        "id": "C0",
+        "name": "public",
+        "description": "published marketing, open data",
+        "source_markdown_reference": "spec/10-security.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "C1",
+        "name": "internal",
+        "description": "routine operational data, non-sensitive logs",
+        "source_markdown_reference": "spec/10-security.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "C2",
+        "name": "confidential",
+        "description": "venture business data, non-public strategy, DRs, financial models",
+        "source_markdown_reference": "spec/10-security.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "C3",
+        "name": "sensitive",
+        "description": "customer personal data, credential-adjacent material, prompts containing C2 aggregates, security detections",
+        "source_markdown_reference": "spec/10-security.md#5",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "C4",
+        "name": "critical",
+        "description": "treasury/banking data, key-material references, audit-log integrity artifacts, IaC state, Constitutional policy state",
+        "source_markdown_reference": "spec/10-security.md#5",
+        "normative_status": "constitutional"
+      }
+    ],
+    "provenance_labels": [
+      {
+        "id": "P0",
+        "name": "Constitutional / system",
+        "description": "the agent card, policies",
+        "source_markdown_reference": "spec/10-security.md#11",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "P1",
+        "name": "platform-internal, validated",
+        "description": "knowledge items with provenance, DRs",
+        "source_markdown_reference": "spec/10-security.md#11",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "P2",
+        "name": "internal, unvalidated",
+        "description": "other agents' unreviewed output",
+        "source_markdown_reference": "spec/10-security.md#11",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "P3",
+        "name": "external, semi-trusted",
+        "description": "contracted-vendor documents, paid data feeds",
+        "source_markdown_reference": "spec/10-security.md#11",
+        "normative_status": "constitutional"
+      },
+      {
+        "id": "P4",
+        "name": "external, untrusted",
+        "description": "web content, customer messages, inbound email, scraped anything",
+        "source_markdown_reference": "spec/10-security.md#11",
+        "normative_status": "constitutional"
+      }
+    ]
+  }
+}

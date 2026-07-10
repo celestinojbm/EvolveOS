@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evolveos.spec/schemas/agents.schema.json",
+  "title": "EvolveOS agent registry (Appendix B)",
+  "version": "0.1.0",
+  "type": "object",
+  "required": ["version", "source", "agents"],
+  "properties": {
+    "version": {"type": "string"},
+    "source": {"type": "string"},
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "$comment": "additionalProperties true: tier-specific fields (scope, purpose, reports_to, domain, spawned_by, lifetime, autonomy_ceiling_raw) vary by tier and are informational.",
+        "required": [
+          "id", "name", "tier", "autonomy_ceiling",
+          "allowed_capabilities", "forbidden_capabilities",
+          "human_accountable_officer", "source_markdown_reference"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9-]+$"},
+          "name": {"type": "string"},
+          "tier": {"type": "string", "enum": ["T1", "T2", "T3", "T4"]},
+          "autonomy_ceiling": {"type": "string", "enum": ["A0", "A1", "A2", "A3", "A4"]},
+          "autonomy_ceiling_raw": {"type": "string"},
+          "human_accountable_officer": {"type": ["string", "null"]},
+          "allowed_capabilities": {"type": ["array", "null"], "items": {"type": "string"}},
+          "forbidden_capabilities": {"type": ["array", "null"], "items": {"type": "string"}},
+          "source_markdown_reference": {"type": "string"}
+        }
+      }
+    }
+  }
+}

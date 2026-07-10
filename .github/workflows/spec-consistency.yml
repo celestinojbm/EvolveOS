@@ -28,3 +28,6 @@ jobs:
 
       - name: Fixture tests (each check fires on a broken fixture)
         run: python scripts/test_checks.py
+
+      - name: Machine-readable schemas (data matches spec; fixtures valid)
+        run: python scripts/validate_schemas.py

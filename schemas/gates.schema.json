@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evolveos.spec/schemas/gates.schema.json",
+  "title": "EvolveOS decision gates (G-00..G-18)",
+  "version": "0.1.0",
+  "type": "object",
+  "required": ["version", "source", "gates"],
+  "properties": {
+    "version": {"type": "string"},
+    "source": {"type": "string"},
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "name", "section", "trigger_or_transition",
+          "reversibility_class", "reversibility_raw", "decision_inputs",
+          "approver_body", "human_approval_required",
+          "mandatory_kill_criteria_required", "sla_or_envelope",
+          "implemented_status", "source_markdown_reference"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^G-\\d{2}$"},
+          "name": {"type": "string"},
+          "section": {"type": "string", "enum": ["standing", "pipeline"]},
+          "trigger_or_transition": {"type": "string"},
+          "reversibility_class": {"type": "string", "enum": ["control", "R1", "R2", "R3", "R4"]},
+          "reversibility_raw": {"type": "string"},
+          "decision_inputs": {"type": "string"},
+          "approver_body": {"type": "string"},
+          "human_approval_required": {"type": "boolean"},
+          "mandatory_kill_criteria_required": {"type": "boolean"},
+          "sla_or_envelope": {"type": "string"},
+          "implemented_status": {"type": "string", "enum": ["planned", "deferred", "active", "data_only"]},
+          "source_markdown_reference": {"type": "string"}
+        }
+      }
+    }
+  }
+}

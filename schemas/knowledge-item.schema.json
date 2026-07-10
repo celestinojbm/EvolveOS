@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evolveos.spec/schemas/knowledge-item.schema.json",
+  "title": "EvolveOS Knowledge Item",
+  "version": "0.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "type", "provenance", "confidence", "validation_status"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^KI-\\d{4}-\\d+$"},
+    "title": {"type": "string", "minLength": 1},
+    "type": {"type": "string", "minLength": 1},
+    "provenance": {"type": "array", "items": {"type": "string"}},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "expires_at": {"type": ["string", "null"]},
+    "review_at": {"type": ["string", "null"]},
+    "source_links": {"type": "array", "items": {"type": "string"}},
+    "validation_status": {"type": "string", "enum": ["proposed", "validated", "expired", "superseded"]},
+    "owner": {"type": ["string", "null"]},
+    "privacy_class": {"type": ["string", "null"], "pattern": "^PC-[0-3]$"},
+    "related_decision_records": {"type": "array", "items": {"type": "string", "pattern": "^DR-\\d{4}-\\d+$"}}
+  }
+}

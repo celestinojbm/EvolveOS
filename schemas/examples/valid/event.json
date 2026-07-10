@@ -1,0 +1,13 @@
+{
+  "id": "EV-01JQ8ZK3M7X2A9C4D6E8F0G1H2",
+  "timestamp": "2027-02-12T09:30:00Z",
+  "actor_type": "human",
+  "actor_id": "portfolio-review-lead",
+  "event_type": "gate_passed",
+  "object_type": "gate",
+  "object_id": "G-03",
+  "payload": {"gate_id": "G-03", "decision_record": "DR-2027-001", "venture_id": "V-2027-004"},
+  "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "hash": "7d3a1b9c2e4f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff0",
+  "trace_id": "trace-2027-02-12-0001"
+}

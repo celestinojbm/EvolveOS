@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://evolveos.spec/schemas/taxonomies.schema.json",
+  "title": "EvolveOS canonical taxonomies",
+  "version": "0.1.0",
+  "type": "object",
+  "required": ["version", "source", "taxonomies"],
+  "properties": {
+    "version": {"type": "string"},
+    "source": {"type": "string"},
+    "taxonomies": {
+      "type": "object",
+      "required": [
+        "reversibility_classes", "autonomy_levels", "gates",
+        "privacy_classes", "data_classes", "provenance_labels"
+      ],
+      "properties": {
+        "reversibility_classes": {"type": "array", "items": {"$comment": "taxonomy entry", "type": "object", "required": ["id", "name", "source_markdown_reference", "normative_status"], "properties": {"id": {"type": "string", "pattern": "^R[1-4]$"}, "name": {"type": "string"}, "description": {"type": "string"}, "source_markdown_reference": {"type": "string"}, "normative_status": {"type": "string", "enum": ["constitutional", "normative"]}}}},
+        "autonomy_levels": {"type": "array", "items": {"type": "object", "required": ["id", "name", "source_markdown_reference", "normative_status"], "properties": {"id": {"type": "string", "pattern": "^A[0-4]$"}, "name": {"type": "string"}, "description": {"type": "string"}, "source_markdown_reference": {"type": "string"}, "normative_status": {"type": "string", "enum": ["constitutional", "normative"]}}}},
+        "gates": {"type": "array", "items": {"type": "object", "required": ["id", "name", "source_markdown_reference", "normative_status"], "properties": {"id": {"type": "string", "pattern": "^G-\\d{2}$"}, "name": {"type": "string"}, "description": {"type": "string"}, "source_markdown_reference": {"type": "string"}, "normative_status": {"type": "string", "enum": ["constitutional", "normative"]}}}},
+        "privacy_classes": {"type": "array", "items": {"type": "object", "required": ["id", "name", "source_markdown_reference", "normative_status"], "properties": {"id": {"type": "string", "pattern": "^PC-[0-3]$"}, "name": {"type": "string"}, "description": {"type": "string"}, "source_markdown_reference": {"type": "string"}, "normative_status": {"type": "string", "enum": ["constitutional", "normative"]}}}},
+        "data_classes": {"type": "array", "items": {"type": "object", "required": ["id", "name", "source_markdown_reference", "normative_status"], "properties": {"id": {"type": "string", "pattern": "^C[0-4]$"}, "name": {"type": "string"}, "description": {"type": "string"}, "source_markdown_reference": {"type": "string"}, "normative_status": {"type": "string", "enum": ["constitutional", "normative"]}}}},
+        "provenance_labels": {"type": "array", "items": {"type": "object", "required": ["id", "name", "source_markdown_reference", "normative_status"], "properties": {"id": {"type": "string", "pattern": "^P[0-4]$"}, "name": {"type": "string"}, "description": {"type": "string"}, "source_markdown_reference": {"type": "string"}, "normative_status": {"type": "string", "enum": ["constitutional", "normative"]}}}}
+      }
+    }
+  }
+}

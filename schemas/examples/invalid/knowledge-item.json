@@ -1,0 +1,8 @@
+{
+  "id": "KI-2027-015",
+  "title": "Invalid example: confidence out of range and bad validation status",
+  "type": "market-fact",
+  "provenance": ["interview:2027-02-08:prospect-07"],
+  "confidence": 1.7,
+  "validation_status": "maybe"
+}
