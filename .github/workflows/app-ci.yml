@@ -1,6 +1,8 @@
 name: app-ci
 
-# Builds and tests the Phase 0 console scaffold (issue #5).
+# Builds and tests the Phase 0 console scaffold (issue #5) and the append-only
+# event log (issue #6): single-writer guard, clean+idempotent migrations, the
+# event-log tests (append, triggers, tamper detection), and a live chain verify.
 # Separate from spec-consistency.yml (which stays standard-library-Python only).
 
 on:
@@ -51,11 +53,17 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Typecheck + tests (generated type consumed by a test)
-        run: pnpm test
+      - name: Every event write goes through the eventlog module
+        run: pnpm check:eventlog
 
       - name: Migrations apply to a clean DB
         run: pnpm migrate
 
       - name: Migrations are idempotent (no-op on second run)
         run: pnpm migrate
+
+      - name: Typecheck + tests (generated type, event log, append-only triggers)
+        run: pnpm test
+
+      - name: Verify the event-log hash chain
+        run: pnpm verify:events

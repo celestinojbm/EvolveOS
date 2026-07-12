@@ -13,6 +13,8 @@
     "test": "pnpm --filter @evolveos/app test",
     "typegen": "node ops/typegen.mjs",
     "migrate": "node ops/migrate.mjs",
+    "check:eventlog": "node ops/check-single-writer.mjs",
+    "verify:events": "node ops/verify-chain.mjs",
     "db:up": "docker compose -f ops/docker-compose.yml up -d",
     "db:down": "docker compose -f ops/docker-compose.yml down -v"
   },
