@@ -1,0 +1,23 @@
+# Local development Postgres for the EvolveOS console (issue #5).
+# Throwaway local-dev credentials only — NOT a secret and never used in any
+# deployed environment. Start with `pnpm db:up`, stop with `pnpm db:down`.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: evolveos-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: evolveos
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d evolveos"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

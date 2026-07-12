@@ -1,0 +1,61 @@
+name: app-ci
+
+# Builds and tests the Phase 0 console scaffold (issue #5).
+# Separate from spec-consistency.yml (which stays standard-library-Python only).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # Throwaway CI-only credentials; never used in any deployed environment.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: evolveos
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d evolveos"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/evolveos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate types from JSON Schemas
+        run: pnpm typegen
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck + tests (generated type consumed by a test)
+        run: pnpm test
+
+      - name: Migrations apply to a clean DB
+        run: pnpm migrate
+
+      - name: Migrations are idempotent (no-op on second run)
+        run: pnpm migrate

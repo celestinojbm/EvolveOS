@@ -1,0 +1,26 @@
+{
+  "name": "evolveos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EvolveOS monorepo — Phase 0 scaffold (issue #5). No product features yet.",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @evolveos/app dev",
+    "build": "pnpm --filter @evolveos/app build",
+    "test": "pnpm --filter @evolveos/app test",
+    "typegen": "node ops/typegen.mjs",
+    "migrate": "node ops/migrate.mjs",
+    "db:up": "docker compose -f ops/docker-compose.yml up -d",
+    "db:down": "docker compose -f ops/docker-compose.yml down -v"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4",
+    "pg": "^8.13.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

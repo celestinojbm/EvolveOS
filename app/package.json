@@ -1,0 +1,24 @@
+{
+  "name": "@evolveos/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "EvolveOS console — Phase 0 skeleton. A minimal TypeScript service; no UI/features yet (Next.js enters in Phase 1, see ADR-008).",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "prebuild": "node ../ops/typegen.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "pretest": "node ../ops/typegen.mjs && tsc -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
