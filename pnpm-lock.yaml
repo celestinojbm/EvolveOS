@@ -16,10 +16,17 @@ importers:
         version: 8.22.0
 
   app:
+    dependencies:
+      pg:
+        specifier: ^8.13.1
+        version: 8.22.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.0
       tsx:
         specifier: ^4.19.2
         version: 4.23.0
@@ -485,6 +492,9 @@ packages:
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
+
+  '@types/pg@8.20.0':
+    resolution: {integrity: sha512-bEPFOaMAHTEP1EzpvHTbmwR8UsFyHSKsRisLIHVMXnpNefSbGA1bD6CVy+qKjGSqmZqNqBDV2azOBo8TgkcVow==}
 
   '@vitest/expect@2.1.9':
     resolution: {integrity: sha512-UJCIkTBenHeKT1TTlKMJWy1laZewsRIzYighyYiJKZreqtdxSos/S1t+ktRMQWu2CKqaarrkeszJx1cgC5tGZw==}
@@ -1061,6 +1071,12 @@ snapshots:
   '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/pg@8.20.0':
+    dependencies:
+      '@types/node': 22.20.1
+      pg-protocol: 1.15.0
+      pg-types: 2.2.0
 
   '@vitest/expect@2.1.9':
     dependencies:
