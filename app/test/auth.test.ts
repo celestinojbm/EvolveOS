@@ -222,3 +222,127 @@ describe("user/role model (Postgres)", () => {
     ).rejects.toThrow(/foreign key|violates/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Concurrency — two live connections against the real Postgres.
+// ---------------------------------------------------------------------------
+
+describe("concurrency (Postgres)", () => {
+  let client: pg.Client;
+
+  beforeAll(async () => {
+    client = new pg.Client({ connectionString: DATABASE_URL });
+    await client.connect();
+  });
+  afterAll(async () => {
+    if (client) await client.end();
+  });
+
+  async function freshClient(): Promise<pg.Client> {
+    const c = new pg.Client({ connectionString: DATABASE_URL });
+    await c.connect();
+    return c;
+  }
+  async function seqOf(eventId: string): Promise<number | null> {
+    const { rows } = await client.query<{ seq: string }>("SELECT seq FROM events WHERE id = $1", [
+      eventId,
+    ]);
+    return rows.length ? Number(rows[0].seq) : null;
+  }
+  async function latestSeq(type: string, objectId: string): Promise<number | null> {
+    const { rows } = await client.query<{ seq: string }>(
+      "SELECT seq FROM events WHERE event_type = $1 AND object_id = $2 ORDER BY seq DESC LIMIT 1",
+      [type, objectId],
+    );
+    return rows.length ? Number(rows[0].seq) : null;
+  }
+
+  it("grantRole + revokeRole on the same user/role never deadlock", async () => {
+    const u = uid("cc-gr");
+    await createUser(client, { id: u, displayName: "GR" });
+    const a = await freshClient();
+    const b = await freshClient();
+    try {
+      for (let i = 0; i < 5; i++) {
+        if (!(await getRoles(client, u)).includes("viewer")) {
+          await grantRole(client, { userId: u, role: "viewer", grantedBy: "admin" });
+        }
+        const results = await Promise.allSettled([
+          revokeRole(a, { userId: u, role: "viewer", revokedBy: "admin" }),
+          grantRole(b, { userId: u, role: "viewer", grantedBy: "admin" }),
+        ]);
+        for (const r of results) {
+          if (r.status === "rejected") {
+            expect(String(r.reason)).not.toMatch(/deadlock/i);
+          }
+        }
+      }
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  it("approval + revoke is serializable: no approval survives an earlier revoke", async () => {
+    const a = await freshClient();
+    const b = await freshClient();
+    try {
+      for (let i = 0; i < 10; i++) {
+        const x = uid(`cc-appr-${i}`);
+        const p = uid(`cc-prop-${i}`);
+        await createUser(client, { id: x, displayName: "X" });
+        await createUser(client, { id: p, displayName: "P" });
+        await grantRole(client, { userId: x, role: "approver", grantedBy: "admin" });
+        const objId = `DR-cc-${runId}-${i}`;
+
+        const [rev, appr] = await Promise.allSettled([
+          revokeRole(a, { userId: x, role: "approver", revokedBy: "admin" }),
+          recordApproval(b, {
+            objectType: "decision-record",
+            objectId: objId,
+            proposerActorId: p,
+            approverActorId: x,
+          }),
+        ]);
+
+        expect(rev.status).toBe("fulfilled"); // an active grant existed, so revoke always applies
+        const revSeq = await latestSeq("role.revoked", x);
+
+        if (appr.status === "fulfilled") {
+          // Recorded => it was serialized strictly BEFORE the revoke.
+          const apprSeq = await seqOf((appr.value as { eventId: string }).eventId);
+          expect(apprSeq).not.toBeNull();
+          expect(apprSeq!).toBeLessThan(revSeq!);
+          const rows = await client.query("SELECT 1 FROM approvals WHERE object_id = $1", [objId]);
+          expect(rows.rows.length).toBe(1);
+        } else {
+          // Rejected => the revoke won; no approval row or event may persist.
+          expect(String(appr.reason)).toMatch(/not authorized|approver/i);
+          const rows = await client.query("SELECT 1 FROM approvals WHERE object_id = $1", [objId]);
+          expect(rows.rows.length).toBe(0);
+          expect(await countEvents(client, "approval.recorded", objId)).toBe(0);
+        }
+      }
+    } finally {
+      await a.end();
+      await b.end();
+    }
+  });
+
+  it("an approval is rejected once the approver's role has been revoked (transactional check)", async () => {
+    const x = uid("cc-seq-x");
+    const p = uid("cc-seq-p");
+    await createUser(client, { id: x, displayName: "X" });
+    await createUser(client, { id: p, displayName: "P" });
+    await grantRole(client, { userId: x, role: "approver", grantedBy: "admin" });
+    await revokeRole(client, { userId: x, role: "approver", revokedBy: "admin" });
+    await expect(
+      recordApproval(client, {
+        objectType: "decision-record",
+        objectId: `DR-seq-${runId}`,
+        proposerActorId: p,
+        approverActorId: x,
+      }),
+    ).rejects.toThrow(/not authorized|approver/i);
+  });
+});

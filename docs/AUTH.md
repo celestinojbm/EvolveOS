@@ -46,6 +46,21 @@ BEGIN → projection change + appendEventTx(event) → COMMIT   (ROLLBACK on any
 
 The event log design is unchanged — `appendEventTx` is just the transaction-composable form of the existing append; the hash chain, advisory lock, and append-only triggers behave exactly as before, and a rolled-back append leaves no row (chain stays linear; `verify:events` stays green).
 
+### Concurrency: one lock order, one serialization point
+
+Every audited mutation acquires the event-chain **advisory lock first** (it is the first thing `appendEventTx` does), then touches projection rows:
+
+```
+BEGIN → appendEventTx (advisory lock) → validate + mutate projection → COMMIT
+```
+
+Because all audited mutations take the *same* single advisory lock before any projection row, they are **totally ordered** — which gives two guarantees:
+
+- **No lock-order deadlock.** `grantRole` and `revokeRole` on the same `(user, role)` can no longer acquire an advisory lock and a row lock in opposite orders; both take the advisory lock first, so one completes before the other starts its projection work.
+- **No approve-vs-revoke TOCTOU.** `recordApproval` re-checks the approver's `approver` role **inside** the serialized transaction (not before it). So a concurrent revoke is either serialized before the approval — in which case the in-transaction role check fails and the approval is rejected (its provisional event rolled back) — or after it, in which case the approval was validly recorded first. An approval can never land after an effective revocation. Event `seq` (assigned under the same lock) reflects this total order, and the concurrency tests assert it.
+
+A no-op (`revokeRole` with no active grant, `endSession` with nothing to end) rolls the whole transaction back via an internal sentinel, so it never leaves a false `role.revoked` / `auth.session_ended` event.
+
 ## What it does / does NOT guarantee
 
 **Does:** distinct roles; a durable, event-logged trail of every grant/approval/session; a database-level guarantee that no approval is a self-approval.
