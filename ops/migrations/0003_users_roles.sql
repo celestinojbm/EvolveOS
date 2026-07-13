@@ -4,7 +4,10 @@
 --
 -- These tables are queryable projections; the append-only event log (issue #6)
 -- is the audit source of truth. app/src/lib/auth.ts is the writer: every role
--- grant, approval, and session transition is also recorded as an event.
+-- grant, approval, and session transition is recorded as an event in the SAME
+-- transaction as the projection change (all-or-nothing). role_grants.event_id
+-- and approvals.event_id carry FKs to events(id), so an event id is always real.
+-- (This migration runs after 0002_events.sql, which creates events.)
 --
 -- No real credentials: there is no password/secret store here. "Session auth"
 -- at Phase 0 is an opaque session id + login/logout events, not an IdP.
@@ -20,7 +23,7 @@ CREATE TABLE IF NOT EXISTS role_grants (
     user_id    TEXT NOT NULL REFERENCES users (id),
     role       TEXT NOT NULL CHECK (role IN ('operator', 'approver', 'viewer')),
     granted_by TEXT NOT NULL,
-    event_id   TEXT NOT NULL,
+    event_id   TEXT NOT NULL REFERENCES events (id),
     granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at TIMESTAMPTZ
 );
@@ -37,7 +40,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     object_id         TEXT NOT NULL,
     proposer_actor_id TEXT NOT NULL,
     approver_actor_id TEXT NOT NULL,
-    event_id          TEXT NOT NULL,
+    event_id          TEXT NOT NULL REFERENCES events (id),
     approved_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT approvals_proposer_ne_approver CHECK (proposer_actor_id <> approver_actor_id)
 );

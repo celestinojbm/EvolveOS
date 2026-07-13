@@ -30,6 +30,22 @@ An approval whose approver equals the proposer is rejected:
 
 Events emitted: `user.created`, `role.granted`, `role.revoked`, `approval.recorded`, `auth.session_started`, `auth.session_ended` — all valid `event.schema.json` records (`actor_type: human`), so **all auth/role activity is in the log**.
 
+## Atomicity (mutation + event commit together)
+
+The event log is the audit source of truth, so a projection change and the event that represents it must never diverge. Every mutation runs inside **one Postgres transaction**:
+
+```
+BEGIN → projection change + appendEventTx(event) → COMMIT   (ROLLBACK on any error)
+```
+
+`appendEventTx` (issue #6) appends within the caller's open transaction — no separate BEGIN/COMMIT — so the event and the projection commit or roll back as a unit. Consequences, all covered by tests:
+
+- **No projection change without its event, and no event for a change that failed.** If either statement throws, the transaction rolls back; the inserted event row is undone (no orphan event) and the advisory lock is released.
+- **No false events.** `revokeRole` on a user with no active grant changes nothing and records **no** `role.revoked` (returns `{ revoked: false }` — revoke is idempotent, a no-op is not an error). `endSession` on a session that does not exist, is already ended, or belongs to another user records **no** `auth.session_ended` (returns `{ ended: false }`).
+- **Referential integrity.** `role_grants.event_id` and `approvals.event_id` are `REFERENCES events(id)`, so a grant/approval can only cite a real event. In `grantRole` / `recordApproval` the event is appended first within the transaction so the FK is satisfiable; a later failure (e.g. a duplicate active grant, or the `approvals` CHECK) rolls the event back with it.
+
+The event log design is unchanged — `appendEventTx` is just the transaction-composable form of the existing append; the hash chain, advisory lock, and append-only triggers behave exactly as before, and a rolled-back append leaves no row (chain stays linear; `verify:events` stays green).
+
 ## What it does / does NOT guarantee
 
 **Does:** distinct roles; a durable, event-logged trail of every grant/approval/session; a database-level guarantee that no approval is a self-approval.
@@ -43,7 +59,7 @@ Events emitted: `user.created`, `role.granted`, `role.revoked`, `approval.record
 
 ```bash
 pnpm migrate          # applies ops/migrations/0003_users_roles.sql
-pnpm test             # vitest: role separation (app + DB CHECK), grants, events logged, sessions
+pnpm test             # vitest: role separation (app + DB CHECK), grants, events logged, sessions, atomic rollback / failure paths
 pnpm check:eventlog   # confirms auth writes go through the event-log module
 ```
 

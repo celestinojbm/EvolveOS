@@ -94,48 +94,63 @@ export function computeHash(record: Omit<EventRecord, "hash">): string {
 }
 
 /**
- * Append one event as the new chain head. This is the ONLY function that writes
- * to `events`. Runs in its own transaction with an advisory lock so the
- * previous_hash it reads is still the head when it inserts.
+ * Append one event as the new chain head, inside an ALREADY-OPEN transaction
+ * (no BEGIN/COMMIT here). This is the composable primitive: a caller that must
+ * change a projection AND record its event atomically opens one transaction,
+ * mutates its table, calls this, and commits — so the event and the mutation
+ * commit or roll back together. On the caller's ROLLBACK the inserted event row
+ * is undone too (no orphan event), and the advisory lock (transaction-scoped)
+ * is released. This and `appendEvent` are the ONLY functions that write `events`.
+ */
+export async function appendEventTx(client: Queryable, input: AppendInput): Promise<StoredEvent> {
+  await client.query("SELECT pg_advisory_xact_lock($1)", [APPEND_LOCK_KEY]);
+  const head = await client.query<{ hash: string }>(
+    "SELECT hash FROM events ORDER BY seq DESC LIMIT 1",
+  );
+  const previous_hash = head.rows.length ? head.rows[0].hash : null;
+
+  const base: Omit<EventRecord, "hash"> = {
+    id: input.id,
+    timestamp: input.timestamp,
+    actor_type: input.actor_type,
+    actor_id: input.actor_id,
+    event_type: input.event_type,
+    object_type: input.object_type ?? null,
+    object_id: input.object_id ?? null,
+    payload: input.payload ?? null,
+    previous_hash,
+    trace_id: input.trace_id ?? null,
+  };
+  const hash = computeHash(base);
+
+  const inserted = await client.query<{ seq: string }>(
+    `INSERT INTO events
+       (id, timestamp, actor_type, actor_id, event_type,
+        object_type, object_id, payload, previous_hash, hash, trace_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING seq`,
+    [
+      base.id, base.timestamp, base.actor_type, base.actor_id, base.event_type,
+      base.object_type, base.object_id,
+      base.payload === null ? null : JSON.stringify(base.payload),
+      base.previous_hash, hash, base.trace_id,
+    ],
+  );
+  return { ...base, hash, seq: Number(inserted.rows[0].seq) };
+}
+
+/**
+ * Append one event as the new chain head, in its own transaction. Convenience
+ * wrapper over `appendEventTx` for standalone appends (no projection to keep in
+ * sync). The advisory lock keeps the previous_hash it reads still the head when
+ * it inserts.
  */
 export async function appendEvent(client: Queryable, input: AppendInput): Promise<StoredEvent> {
   await client.query("BEGIN");
   try {
-    await client.query("SELECT pg_advisory_xact_lock($1)", [APPEND_LOCK_KEY]);
-    const head = await client.query<{ hash: string }>(
-      "SELECT hash FROM events ORDER BY seq DESC LIMIT 1",
-    );
-    const previous_hash = head.rows.length ? head.rows[0].hash : null;
-
-    const base: Omit<EventRecord, "hash"> = {
-      id: input.id,
-      timestamp: input.timestamp,
-      actor_type: input.actor_type,
-      actor_id: input.actor_id,
-      event_type: input.event_type,
-      object_type: input.object_type ?? null,
-      object_id: input.object_id ?? null,
-      payload: input.payload ?? null,
-      previous_hash,
-      trace_id: input.trace_id ?? null,
-    };
-    const hash = computeHash(base);
-
-    const inserted = await client.query<{ seq: string }>(
-      `INSERT INTO events
-         (id, timestamp, actor_type, actor_id, event_type,
-          object_type, object_id, payload, previous_hash, hash, trace_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING seq`,
-      [
-        base.id, base.timestamp, base.actor_type, base.actor_id, base.event_type,
-        base.object_type, base.object_id,
-        base.payload === null ? null : JSON.stringify(base.payload),
-        base.previous_hash, hash, base.trace_id,
-      ],
-    );
+    const result = await appendEventTx(client, input);
     await client.query("COMMIT");
-    return { ...base, hash, seq: Number(inserted.rows[0].seq) };
+    return result;
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

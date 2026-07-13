@@ -3,10 +3,17 @@
  * viewer — plus the Part III separation rule: a proposer may not approve their
  * own action.
  *
- * Every mutation is recorded in the append-only event log (issue #6) via
- * `appendEvent` — this module never writes the `events` table directly. The
- * `users`, `role_grants`, `approvals`, and `sessions` tables are queryable
- * projections; the event log is the audit source of truth.
+ * Atomicity (issue #7 follow-up): the event log is the audit source of truth,
+ * so a projection change and the event that represents it must commit or roll
+ * back together. Every mutation runs inside a single Postgres transaction:
+ * BEGIN → projection change + `appendEventTx` → COMMIT (ROLLBACK on any error).
+ * No event is ever recorded for a mutation that did not take effect, and no
+ * projection change is ever visible without its event.
+ *
+ * Events go through `appendEventTx` (the composable event-log write path) — this
+ * module never writes the `events` table directly, so `pnpm check:eventlog`
+ * stays green. `role_grants.event_id` / `approvals.event_id` carry FKs to
+ * `events(id)`, so an event id is always real.
  *
  * No real credentials: sessions are opaque ids + login/logout events, not a
  * password/IdP store. Actor identity is recorded, not cryptographically
@@ -14,7 +21,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Client, PoolClient } from "pg";
-import { appendEvent } from "./eventlog.js";
+import { appendEventTx } from "./eventlog.js";
 
 type Queryable = Client | PoolClient;
 
@@ -25,8 +32,21 @@ function isRole(x: string): x is Role {
   return (ROLES as readonly string[]).includes(x);
 }
 
-/** Append one auth/role event through the single event-log write path. */
-async function logAuthEvent(
+/** Run `fn` in one transaction: BEGIN → fn → COMMIT, ROLLBACK on any error. */
+async function inTransaction<T>(client: Queryable, fn: () => Promise<T>): Promise<T> {
+  await client.query("BEGIN");
+  try {
+    const result = await fn();
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  }
+}
+
+/** Append one auth/role event within the current transaction; returns its id. */
+async function logAuthEventTx(
   client: Queryable,
   args: {
     actorId: string;
@@ -36,7 +56,7 @@ async function logAuthEvent(
     payload?: Record<string, unknown> | null;
   },
 ): Promise<string> {
-  const ev = await appendEvent(client, {
+  const ev = await appendEventTx(client, {
     id: `EV-${randomUUID()}`,
     timestamp: new Date().toISOString(),
     actor_type: "human",
@@ -53,62 +73,73 @@ export async function createUser(
   client: Queryable,
   input: { id: string; displayName: string; createdBy?: string },
 ): Promise<{ id: string; displayName: string }> {
-  await client.query("INSERT INTO users (id, display_name) VALUES ($1, $2)", [
-    input.id,
-    input.displayName,
-  ]);
-  await logAuthEvent(client, {
-    actorId: input.createdBy ?? input.id,
-    eventType: "user.created",
-    objectType: "user",
-    objectId: input.id,
-    payload: { display_name: input.displayName },
+  return inTransaction(client, async () => {
+    await client.query("INSERT INTO users (id, display_name) VALUES ($1, $2)", [
+      input.id,
+      input.displayName,
+    ]);
+    await logAuthEventTx(client, {
+      actorId: input.createdBy ?? input.id,
+      eventType: "user.created",
+      objectType: "user",
+      objectId: input.id,
+      payload: { display_name: input.displayName },
+    });
+    return { id: input.id, displayName: input.displayName };
   });
-  return { id: input.id, displayName: input.displayName };
 }
 
+/**
+ * Grant a role. A duplicate active grant is rejected by the partial-unique index
+ * inside the transaction, which rolls back the `role.granted` event too (no
+ * orphan event).
+ */
 export async function grantRole(
   client: Queryable,
   input: { userId: string; role: Role; grantedBy: string },
 ): Promise<{ userId: string; role: Role; eventId: string }> {
   if (!isRole(input.role)) throw new Error(`invalid role: ${input.role}`);
-  const existing = await client.query(
-    "SELECT 1 FROM role_grants WHERE user_id = $1 AND role = $2 AND revoked_at IS NULL LIMIT 1",
-    [input.userId, input.role],
-  );
-  if (existing.rows.length) {
-    throw new Error(`role already granted: ${input.userId} already has '${input.role}'`);
-  }
-  const eventId = await logAuthEvent(client, {
-    actorId: input.grantedBy,
-    eventType: "role.granted",
-    objectType: "user",
-    objectId: input.userId,
-    payload: { role: input.role },
+  return inTransaction(client, async () => {
+    // Event first so role_grants.event_id (FK -> events.id) is satisfiable.
+    const eventId = await logAuthEventTx(client, {
+      actorId: input.grantedBy,
+      eventType: "role.granted",
+      objectType: "user",
+      objectId: input.userId,
+      payload: { role: input.role },
+    });
+    await client.query(
+      "INSERT INTO role_grants (user_id, role, granted_by, event_id) VALUES ($1, $2, $3, $4)",
+      [input.userId, input.role, input.grantedBy, eventId],
+    );
+    return { userId: input.userId, role: input.role, eventId };
   });
-  await client.query(
-    "INSERT INTO role_grants (user_id, role, granted_by, event_id) VALUES ($1, $2, $3, $4)",
-    [input.userId, input.role, input.grantedBy, eventId],
-  );
-  return { userId: input.userId, role: input.role, eventId };
 }
 
+/**
+ * Revoke a role. If there is no active grant, nothing changes and NO
+ * `role.revoked` event is recorded — returns `{ revoked: false }` (chosen over
+ * throwing: revoke is idempotent and a no-op revoke is not an error).
+ */
 export async function revokeRole(
   client: Queryable,
   input: { userId: string; role: Role; revokedBy: string },
-): Promise<{ revoked: boolean; eventId: string }> {
-  const eventId = await logAuthEvent(client, {
-    actorId: input.revokedBy,
-    eventType: "role.revoked",
-    objectType: "user",
-    objectId: input.userId,
-    payload: { role: input.role },
+): Promise<{ revoked: boolean; eventId?: string }> {
+  return inTransaction(client, async () => {
+    const res = await client.query(
+      "UPDATE role_grants SET revoked_at = now() WHERE user_id = $1 AND role = $2 AND revoked_at IS NULL",
+      [input.userId, input.role],
+    );
+    if ((res.rowCount ?? 0) === 0) return { revoked: false };
+    const eventId = await logAuthEventTx(client, {
+      actorId: input.revokedBy,
+      eventType: "role.revoked",
+      objectType: "user",
+      objectId: input.userId,
+      payload: { role: input.role },
+    });
+    return { revoked: true, eventId };
   });
-  const res = await client.query(
-    "UPDATE role_grants SET revoked_at = now() WHERE user_id = $1 AND role = $2 AND revoked_at IS NULL",
-    [input.userId, input.role],
-  );
-  return { revoked: (res.rowCount ?? 0) > 0, eventId };
 }
 
 export async function getRoles(client: Queryable, userId: string): Promise<Role[]> {
@@ -132,10 +163,12 @@ export async function hasActiveRole(
 }
 
 /**
- * Record an approval. Enforces the separation rule in two layers:
+ * Record an approval. Separation is enforced in two layers:
  *   1. here — an approval whose approver equals the proposer is rejected before
- *      any event is logged;
- *   2. the DB CHECK on `approvals` — the row is rejected regardless of caller.
+ *      the transaction begins, so no event is logged;
+ *   2. the DB CHECK on `approvals` — the row is rejected regardless of caller,
+ *      and because the INSERT shares the transaction with the event append, a
+ *      rejected approval rolls back its `approval.recorded` event (no orphan).
  * The approver must also currently hold the 'approver' role.
  */
 export async function recordApproval(
@@ -153,52 +186,65 @@ export async function recordApproval(
   if (!(await hasActiveRole(client, input.approverActorId, "approver"))) {
     throw new Error(`not authorized: '${input.approverActorId}' lacks the 'approver' role`);
   }
-  const eventId = await logAuthEvent(client, {
-    actorId: input.approverActorId,
-    eventType: "approval.recorded",
-    objectType: input.objectType,
-    objectId: input.objectId,
-    payload: { proposer_actor_id: input.proposerActorId },
+  return inTransaction(client, async () => {
+    // Event first so approvals.event_id (FK -> events.id) is satisfiable.
+    const eventId = await logAuthEventTx(client, {
+      actorId: input.approverActorId,
+      eventType: "approval.recorded",
+      objectType: input.objectType,
+      objectId: input.objectId,
+      payload: { proposer_actor_id: input.proposerActorId },
+    });
+    await client.query(
+      `INSERT INTO approvals
+         (object_type, object_id, proposer_actor_id, approver_actor_id, event_id)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [input.objectType, input.objectId, input.proposerActorId, input.approverActorId, eventId],
+    );
+    return { eventId };
   });
-  await client.query(
-    `INSERT INTO approvals
-       (object_type, object_id, proposer_actor_id, approver_actor_id, event_id)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [input.objectType, input.objectId, input.proposerActorId, input.approverActorId, eventId],
-  );
-  return { eventId };
 }
 
 export async function startSession(
   client: Queryable,
   input: { userId: string },
 ): Promise<{ id: string; eventId: string }> {
-  const id = randomUUID();
-  const eventId = await logAuthEvent(client, {
-    actorId: input.userId,
-    eventType: "auth.session_started",
-    objectType: "session",
-    objectId: id,
-    payload: null,
+  return inTransaction(client, async () => {
+    const id = randomUUID();
+    const eventId = await logAuthEventTx(client, {
+      actorId: input.userId,
+      eventType: "auth.session_started",
+      objectType: "session",
+      objectId: id,
+      payload: null,
+    });
+    await client.query("INSERT INTO sessions (id, user_id) VALUES ($1, $2)", [id, input.userId]);
+    return { id, eventId };
   });
-  await client.query("INSERT INTO sessions (id, user_id) VALUES ($1, $2)", [id, input.userId]);
-  return { id, eventId };
 }
 
+/**
+ * End a session. If the session does not exist, is already ended, or does not
+ * belong to `userId`, nothing changes and NO `auth.session_ended` event is
+ * recorded — returns `{ ended: false }`.
+ */
 export async function endSession(
   client: Queryable,
   input: { sessionId: string; userId: string },
-): Promise<{ ended: boolean; eventId: string }> {
-  const eventId = await logAuthEvent(client, {
-    actorId: input.userId,
-    eventType: "auth.session_ended",
-    objectType: "session",
-    objectId: input.sessionId,
-    payload: null,
+): Promise<{ ended: boolean; eventId?: string }> {
+  return inTransaction(client, async () => {
+    const res = await client.query(
+      "UPDATE sessions SET ended_at = now() WHERE id = $1 AND user_id = $2 AND ended_at IS NULL",
+      [input.sessionId, input.userId],
+    );
+    if ((res.rowCount ?? 0) === 0) return { ended: false };
+    const eventId = await logAuthEventTx(client, {
+      actorId: input.userId,
+      eventType: "auth.session_ended",
+      objectType: "session",
+      objectId: input.sessionId,
+      payload: null,
+    });
+    return { ended: true, eventId };
   });
-  const res = await client.query(
-    "UPDATE sessions SET ended_at = now() WHERE id = $1 AND ended_at IS NULL",
-    [input.sessionId],
-  );
-  return { ended: (res.rowCount ?? 0) > 0, eventId };
 }
