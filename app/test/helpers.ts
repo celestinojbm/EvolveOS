@@ -8,6 +8,8 @@ import { recordApproval } from "../src/lib/auth.js";
 import {
   passG01CreateVenture,
   passPipelineGate,
+  gateMeta,
+  digestDecisionRecordContent,
   type DecisionRecordDoc,
   type GatePassResult,
 } from "../src/lib/gates.js";
@@ -45,6 +47,15 @@ export async function setupActors(client: pg.Client, tag: string): Promise<Actor
   return { proposer, approver };
 }
 
+/** The gate's canonical reversibility class (fallback R2 for unknown gates). */
+function canonicalReversibility(gateId: string): string {
+  try {
+    return gateMeta(gateId).reversibility_class;
+  } catch {
+    return "R2";
+  }
+}
+
 /** Build a schema-valid, approved DR for a gate (overridable for failure tests). */
 export function makeDR(opts: {
   gateId: string;
@@ -53,6 +64,7 @@ export function makeDR(opts: {
   status?: string;
   killCriteria?: string[] | null;
   id?: string;
+  reversibility?: string;
 }): DecisionRecordDoc {
   drSeq += 1;
   const dr: DecisionRecordDoc = {
@@ -61,7 +73,7 @@ export function makeDR(opts: {
     proposer: opts.proposer,
     approver: opts.approver === undefined ? null : opts.approver,
     gate_id: opts.gateId,
-    reversibility_class: "R2",
+    reversibility_class: opts.reversibility ?? canonicalReversibility(opts.gateId),
     decision: "Proceed to the next stage.",
     status: opts.status ?? "approved",
   };
@@ -71,17 +83,24 @@ export function makeDR(opts: {
   return dr;
 }
 
-/** Record the approval evidence for a DR (issue-#7 approvals path). */
+/**
+ * Record the approval evidence for a DR (issue-#7 approvals path), bound to
+ * the DR's exact content: computes the canonical SHA-256 digest and records it
+ * in the approval.recorded event, then the SAME document must be handed to the
+ * gate system.
+ */
 export async function approveDR(
   client: pg.Client,
   actors: Actors,
   dr: DecisionRecordDoc,
+  opts?: { digest?: string },
 ): Promise<string> {
   const r = await recordApproval(client, {
     objectType: "decision-record",
     objectId: dr.id,
     proposerActorId: actors.proposer,
     approverActorId: actors.approver,
+    objectDigest: opts?.digest ?? digestDecisionRecordContent(dr),
   });
   return r.eventId;
 }

@@ -52,8 +52,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import type { Client, PoolClient } from "pg";
-import { appendEventTx, acquireEventChainLock } from "./eventlog.js";
+import { appendEventTx, acquireEventChainLock, canonicalize } from "./eventlog.js";
 import { hasActiveRole } from "./auth.js";
 import {
   TRANSITIONS,
@@ -153,7 +154,33 @@ const validateDrSchema = ajv.compile(
   JSON.parse(readFileSync(join(REPO_ROOT, "schemas", "decision-record.schema.json"), "utf8")),
 );
 
-function validateDecisionRecord(meta: GateMeta, dr: DecisionRecordDoc): void {
+/** Content digest of a DR: SHA-256 over its canonical (key-sorted) JSON. */
+export function digestDecisionRecordContent(dr: DecisionRecordDoc): string {
+  return createHash("sha256").update(canonicalize(dr), "utf8").digest("hex");
+}
+
+export interface DrSnapshot {
+  /** Validated deep clone — the ONLY document the pass may use from here on. */
+  document: DecisionRecordDoc;
+  canonicalJson: string;
+  digest: string;
+}
+
+/**
+ * Take a canonical, IMMUTABLE snapshot of the submitted Decision Record and
+ * validate it — fully synchronous, so callers run it before their first await
+ * and later mutations of the caller's object cannot affect the pass:
+ *   1. canonical deterministic JSON (key-sorted, via eventlog.canonicalize);
+ *   2. deep clone from that JSON — the caller's object is never read again;
+ *   3. schema validation of the CLONE against decision-record.schema.json;
+ *   4. semantic validation (gate id, approved, proposer/approver, separation,
+ *      canonical reversibility class, kill criteria where mandatory);
+ *   5. SHA-256 digest of the canonical JSON — the content the approval
+ *      evidence must have bound (approval.recorded payload.object_digest).
+ */
+export function snapshotDecisionRecord(meta: GateMeta, input: DecisionRecordDoc): DrSnapshot {
+  const canonicalJson = canonicalize(input);
+  const dr = JSON.parse(canonicalJson) as DecisionRecordDoc; // deep clone
   if (!validateDrSchema(dr)) {
     const details = (validateDrSchema.errors ?? [])
       .slice(0, 5)
@@ -180,6 +207,11 @@ function validateDecisionRecord(meta: GateMeta, dr: DecisionRecordDoc): void {
       `role separation: decision record ${dr.id} names the same actor as proposer and approver`,
     );
   }
+  if (dr.reversibility_class !== meta.reversibility_class) {
+    throw new Error(
+      `decision record reversibility mismatch: gate ${meta.id} requires ${meta.reversibility_class}, DR declares ${dr.reversibility_class}`,
+    );
+  }
   if (meta.mandatory_kill_criteria_required) {
     const criteria = (dr.kill_criteria ?? []).filter((k) => k?.trim());
     if (!criteria.length) {
@@ -188,25 +220,70 @@ function validateDecisionRecord(meta: GateMeta, dr: DecisionRecordDoc): void {
       );
     }
   }
+  return {
+    document: dr,
+    canonicalJson,
+    digest: createHash("sha256").update(canonicalJson, "utf8").digest("hex"),
+  };
 }
 
 // --- Approval evidence validation (issue #7 approvals; inside the txn) --------
 
 async function validateApprovalTx(
   client: Queryable,
-  dr: DecisionRecordDoc,
+  snap: DrSnapshot,
   approvalEventId: string,
 ): Promise<{ proposer: string; approver: string }> {
-  const ev = await client.query<{ event_type: string }>(
-    "SELECT event_type FROM events WHERE id = $1",
+  const dr = snap.document;
+  // The append-only event is the primary immutable evidence: verify its type,
+  // actor, object, and content digest — not just its existence.
+  const ev = await client.query<{
+    event_type: string;
+    actor_id: string;
+    object_type: string | null;
+    object_id: string | null;
+    payload: { proposer_actor_id?: string; object_digest?: string } | null;
+  }>(
+    "SELECT event_type, actor_id, object_type, object_id, payload FROM events WHERE id = $1",
     [approvalEventId],
   );
   if (!ev.rows.length) {
     throw new Error(`approval event not found: ${approvalEventId}`);
   }
-  if (ev.rows[0].event_type !== "approval.recorded") {
+  const e = ev.rows[0];
+  if (e.event_type !== "approval.recorded") {
     throw new Error(
-      `event ${approvalEventId} is '${ev.rows[0].event_type}', not an approval.recorded event`,
+      `event ${approvalEventId} is '${e.event_type}', not an approval.recorded event`,
+    );
+  }
+  if (e.actor_id !== dr.approver) {
+    throw new Error(
+      `approval event actor mismatch: event ${approvalEventId} was recorded by '${e.actor_id}', DR approver is '${dr.approver}'`,
+    );
+  }
+  if (e.object_type !== "decision-record") {
+    throw new Error(
+      `approval event ${approvalEventId} is for object_type '${e.object_type}', not a decision-record`,
+    );
+  }
+  if (e.object_id !== dr.id) {
+    throw new Error(
+      `approval event ${approvalEventId} approves DR '${e.object_id}', not the submitted DR '${dr.id}'`,
+    );
+  }
+  if (e.payload?.proposer_actor_id !== dr.proposer) {
+    throw new Error(
+      `approval event proposer mismatch: event records proposer '${e.payload?.proposer_actor_id ?? "none"}', DR proposer is '${dr.proposer}'`,
+    );
+  }
+  if (!e.payload?.object_digest?.trim()) {
+    throw new Error(
+      `approval event ${approvalEventId} carries no document digest (object_digest) — the approval is not bound to the DR content`,
+    );
+  }
+  if (e.payload.object_digest !== snap.digest) {
+    throw new Error(
+      `approval digest mismatch: the approved decision record content differs from the submitted document (approved ${e.payload.object_digest.slice(0, 12)}…, submitted ${snap.digest.slice(0, 12)}…)`,
     );
   }
   const ap = await client.query<{
@@ -347,10 +424,13 @@ export async function passG01CreateVenture(
   if (!input.opportunityRef?.trim()) {
     throw new Error("opportunityRef (the pre-G-01 opportunity brief / KI) must be non-empty");
   }
-  validateDecisionRecord(meta, input.decisionRecord);
-  const dr = input.decisionRecord;
+  // Immutable snapshot BEFORE the first await: later mutations of the
+  // caller's object cannot change the pass; input.decisionRecord is never
+  // read again.
+  const snap = snapshotDecisionRecord(meta, input.decisionRecord);
+  const dr = snap.document;
   return runGateTx(client, async () => {
-    const actors = await validateApprovalTx(client, dr, input.approvalEventId);
+    const actors = await validateApprovalTx(client, snap, input.approvalEventId);
     const minted = await mintVentureAtG01Tx(client, {
       name: input.name,
       opportunityRef: input.opportunityRef,
@@ -373,6 +453,8 @@ export async function passG01CreateVenture(
         proposer_actor_id: actors.proposer,
         approver_actor_id: actors.approver,
         kill_criteria: dr.kill_criteria ?? [],
+        reversibility_class: dr.reversibility_class,
+        dr_digest: snap.digest,
         transition_kind: "gate_pass",
         from_state: null, // pre-venture: an opportunity KI, not a state
         to_state: minted.state,
@@ -433,10 +515,11 @@ export async function passPipelineGate(
     );
   }
   rejectSpend(input.requestedSpend);
-  validateDecisionRecord(meta, input.decisionRecord);
-  const dr = input.decisionRecord;
+  // Immutable snapshot BEFORE the first await (see snapshotDecisionRecord).
+  const snap = snapshotDecisionRecord(meta, input.decisionRecord);
+  const dr = snap.document;
   return runGateTx(client, async () => {
-    const actors = await validateApprovalTx(client, dr, input.approvalEventId);
+    const actors = await validateApprovalTx(client, snap, input.approvalEventId);
     const effect = await advanceVentureForGateTx(client, {
       ventureId: input.ventureId,
       gateId: meta.id,
@@ -457,6 +540,8 @@ export async function passPipelineGate(
         proposer_actor_id: actors.proposer,
         approver_actor_id: actors.approver,
         kill_criteria: dr.kill_criteria ?? [],
+        reversibility_class: dr.reversibility_class,
+        dr_digest: snap.digest,
         transition_kind: "gate_pass",
         from_state: effect.from,
         to_state: effect.to,
@@ -518,10 +603,11 @@ export async function passStandingGate(
       `standing gate ${input.gateId} requires non-empty subjectType and subjectId (it authorizes a subject, not a venture transition)`,
     );
   }
-  validateDecisionRecord(meta, input.decisionRecord);
-  const dr = input.decisionRecord;
+  // Immutable snapshot BEFORE the first await (see snapshotDecisionRecord).
+  const snap = snapshotDecisionRecord(meta, input.decisionRecord);
+  const dr = snap.document;
   return runGateTx(client, async () => {
-    const actors = await validateApprovalTx(client, dr, input.approvalEventId);
+    const actors = await validateApprovalTx(client, snap, input.approvalEventId);
     if (input.ventureId) {
       const v = await client.query("SELECT 1 FROM ventures WHERE id = $1", [input.ventureId]);
       if (!v.rows.length) throw new Error(`venture not found: ${input.ventureId}`);
@@ -542,6 +628,8 @@ export async function passStandingGate(
         proposer_actor_id: actors.proposer,
         approver_actor_id: actors.approver,
         kill_criteria: dr.kill_criteria ?? null,
+        reversibility_class: dr.reversibility_class,
+        dr_digest: snap.digest,
         transition_kind: "authorization", // standing: no venture transition
         from_state: null,
         to_state: null,

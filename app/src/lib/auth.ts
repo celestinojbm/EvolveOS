@@ -188,6 +188,14 @@ export async function hasActiveRole(
  *      an approval can never be recorded after an effective revocation (TOCTOU
  *      closed). A missing role rolls back the provisional event;
  *   3. the DB CHECK on `approvals` backstops `proposer <> approver`.
+ *
+ * Content binding (issue #9): an approval of a `decision-record` MUST carry
+ * `objectDigest` — the SHA-256 of the DR's canonical JSON (see
+ * gates.digestDecisionRecordContent). The append-only `approval.recorded`
+ * event records it as `payload.object_digest`, immutably binding the approval
+ * to the DR's id, its FULL content, the proposer, and the approver (the event
+ * actor). The gate system rejects any pass whose submitted DR content does not
+ * hash to the approved digest.
  */
 export async function recordApproval(
   client: Queryable,
@@ -196,10 +204,17 @@ export async function recordApproval(
     objectId: string;
     proposerActorId: string;
     approverActorId: string;
+    /** SHA-256 of the approved document's canonical JSON. Mandatory for decision-records. */
+    objectDigest?: string | null;
   },
 ): Promise<{ eventId: string }> {
   if (input.approverActorId === input.proposerActorId) {
     throw new Error("role separation: the approver must differ from the proposer");
+  }
+  if (input.objectType === "decision-record" && !input.objectDigest?.trim()) {
+    throw new Error(
+      "approvals for a decision-record require objectDigest (SHA-256 of the canonical DR content)",
+    );
   }
   return inTransaction(client, async () => {
     const eventId = await logAuthEventTx(client, {
@@ -207,7 +222,10 @@ export async function recordApproval(
       eventType: "approval.recorded",
       objectType: input.objectType,
       objectId: input.objectId,
-      payload: { proposer_actor_id: input.proposerActorId },
+      payload: {
+        proposer_actor_id: input.proposerActorId,
+        object_digest: input.objectDigest?.trim() ?? null,
+      },
     });
     // Re-check the role INSIDE the serialized transaction (not before it).
     if (!(await hasActiveRole(client, input.approverActorId, "approver"))) {

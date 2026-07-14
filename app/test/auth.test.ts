@@ -87,6 +87,7 @@ describe("user/role model (Postgres)", () => {
     await expect(
       recordApproval(client, {
         objectType: "decision-record",
+        objectDigest: "t".repeat(64),
         objectId: "DR-2027-777",
         proposerActorId: bob,
         approverActorId: bob,
@@ -97,6 +98,7 @@ describe("user/role model (Postgres)", () => {
   it("records an approval when proposer != approver and logs the event", async () => {
     const r = await recordApproval(client, {
       objectType: "decision-record",
+        objectDigest: "t".repeat(64),
       objectId: "DR-2027-778",
       proposerActorId: alice,
       approverActorId: bob,
@@ -108,6 +110,7 @@ describe("user/role model (Postgres)", () => {
     await expect(
       recordApproval(client, {
         objectType: "decision-record",
+        objectDigest: "t".repeat(64),
         objectId: "DR-2027-779",
         proposerActorId: alice,
         approverActorId: carol,
@@ -190,6 +193,7 @@ describe("user/role model (Postgres)", () => {
       withInsertBlocked(client, "approvals", () =>
         recordApproval(client, {
           objectType: "decision-record",
+        objectDigest: "t".repeat(64),
           objectId: objId,
           proposerActorId: alice,
           approverActorId: bob,
@@ -299,6 +303,7 @@ describe("concurrency (Postgres)", () => {
           revokeRole(a, { userId: x, role: "approver", revokedBy: "admin" }),
           recordApproval(b, {
             objectType: "decision-record",
+        objectDigest: "t".repeat(64),
             objectId: objId,
             proposerActorId: p,
             approverActorId: x,
@@ -339,6 +344,7 @@ describe("concurrency (Postgres)", () => {
     await expect(
       recordApproval(client, {
         objectType: "decision-record",
+        objectDigest: "t".repeat(64),
         objectId: `DR-seq-${runId}`,
         proposerActorId: p,
         approverActorId: x,

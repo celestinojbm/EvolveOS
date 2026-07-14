@@ -22,7 +22,7 @@ An approval whose approver equals the proposer is rejected:
 1. **Application layer** — `recordApproval` in `app/src/lib/auth.ts` throws *before* any event is logged, so a self-approval never reaches the log.
 2. **Data layer** — `approvals` carries `CHECK (proposer_actor_id <> approver_actor_id)`, so the database rejects the row regardless of the code path that attempts it. This is the "enforced at the data layer" guarantee from the issue.
 
-`recordApproval` additionally requires the approver to currently hold the `approver` role.
+`recordApproval` additionally requires the approver to currently hold the `approver` role. Since issue #9, approving a **decision-record** also requires `objectDigest` — the SHA-256 of the DR's canonical JSON — recorded as `payload.object_digest` in the append-only `approval.recorded` event, so the approval is immutably bound to the exact approved content (the gate system rejects any pass whose submitted DR does not hash to the approved digest; see [GATE_SYSTEM](GATE_SYSTEM.md)).
 
 ## The module (`app/src/lib/auth.ts`)
 

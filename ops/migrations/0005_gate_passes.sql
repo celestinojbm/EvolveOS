@@ -15,8 +15,8 @@
 
 CREATE TABLE IF NOT EXISTS gate_passes (
     id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    gate_id           TEXT NOT NULL CHECK (gate_id ~ '^G-\d{2}$'),
-    dr_id             TEXT NOT NULL UNIQUE,
+    gate_id           TEXT NOT NULL,
+    dr_id             TEXT NOT NULL UNIQUE CHECK (dr_id ~ '^DR-\d{4}-\d+$'),
     approval_event_id TEXT NOT NULL REFERENCES events (id),
     gate_event_id     TEXT NOT NULL UNIQUE REFERENCES events (id),
     venture_id        TEXT REFERENCES ventures (id),
@@ -27,12 +27,22 @@ CREATE TABLE IF NOT EXISTS gate_passes (
     passed_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT gate_passes_proposer_ne_approver
         CHECK (proposer_actor_id <> approver_actor_id),
-    -- A pass binds a venture (pipeline) or a non-empty subject (standing gates,
-    -- which may additionally reference a venture); never neither.
-    CONSTRAINT gate_passes_target CHECK (
-        (venture_id IS NOT NULL AND subject_type IS NULL AND subject_id IS NULL)
-        OR (subject_type IS NOT NULL AND length(trim(subject_type)) > 0
-            AND subject_id IS NOT NULL AND length(trim(subject_id)) > 0)
+    -- Backstop for the implemented gate set and its shape: pipeline passes
+    -- (G-01..G-06) bind a venture and no subject; standing passes (G-17/G-18)
+    -- bind a non-empty subject (venture optional). Everything else — G-00,
+    -- G-07..G-16, unknown ids — is unrepresentable even by direct INSERT.
+    CONSTRAINT gate_passes_gate_shape CHECK (
+        (
+            gate_id IN ('G-01', 'G-02', 'G-03', 'G-04', 'G-05', 'G-06')
+            AND venture_id IS NOT NULL
+            AND subject_type IS NULL
+            AND subject_id IS NULL
+        )
+        OR (
+            gate_id IN ('G-17', 'G-18')
+            AND subject_type IS NOT NULL AND length(trim(subject_type)) > 0
+            AND subject_id IS NOT NULL AND length(trim(subject_id)) > 0
+        )
     )
 );
 
