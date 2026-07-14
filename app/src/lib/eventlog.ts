@@ -57,6 +57,18 @@ export interface StoredEvent extends EventRecord {
 const APPEND_LOCK_KEY = 4207001;
 
 /**
+ * Acquire the event-chain advisory lock inside the caller's open transaction.
+ * This is the FIRST lock every audited mutation must take (the consistent lock
+ * order from issue #7). `appendEventTx` acquires it implicitly; call this
+ * explicitly when a mutation needs serialization BEFORE its first append (e.g.
+ * computing a sequential id). Transaction-scoped advisory locks are reentrant,
+ * so a later `appendEventTx` in the same transaction is a no-op re-acquire.
+ */
+export async function acquireEventChainLock(client: Queryable): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock($1)", [APPEND_LOCK_KEY]);
+}
+
+/**
  * Deterministic JSON: object keys sorted recursively, arrays preserved, no
  * insignificant whitespace. `undefined` object members are dropped. This is the
  * exact byte string that gets hashed, so it must be stable across processes.
