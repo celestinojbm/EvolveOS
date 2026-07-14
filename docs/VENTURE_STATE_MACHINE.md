@@ -2,18 +2,32 @@
 
 **Status:** Phase 0 · Implements issue **[#8](https://github.com/celestinojbm/EvolveOS/issues/8)** (P0-7). The single venture record and the pre-entity slice of Part V's gated state machine — stages 1–12 as a linear enum, with the stage 5–9 analysis block as a checklist inside one macro-state, per [Buildability Audit](BUILDABILITY_AUDIT.md) §6(f). Stages 13–23 (G-07 onward: entity, operating tracks, growth, terminal states) are deliberately out of scope.
 
-Canonical sources live in **one place each**: the states, the stage 1–12 mapping, the transition table (with its gates), and the five analysis items are declared in [`app/src/lib/venture.ts`](../app/src/lib/venture.ts); the DB backstop constraints in [`ops/migrations/0004_ventures.sql`](../ops/migrations/0004_ventures.sql). A test cross-checks every transition gate against the machine-readable [`schemas/data/gates.json`](../schemas/data/gates.json).
+Canonical sources live in **one place each**: the states, the stage 1–12 mapping, the typed transition table (with its gates), and the five analysis items are declared in [`app/src/lib/venture.ts`](../app/src/lib/venture.ts); the DB backstop constraints in [`ops/migrations/0004_ventures.sql`](../ops/migrations/0004_ventures.sql). Tests cross-check every transition **semantically** against the machine-readable [`schemas/data/gates.json`](../schemas/data/gates.json) (gate id, name, and Appendix C transition text — not just id existence).
+
+## Venture birth: ids are minted at G-01 (Part V §1.2)
+
+> "Venture IDs are minted at G-01 pass. Pre-G-01 opportunity briefs are not ventures; they are knowledge items (Part VI) in the opportunity backlog."
+
+**Stage 1 (Opportunity Discovery) is pre-venture:** no `ventures` row, no `V-…` id — the opportunity lives as a knowledge item in the backlog (no KI store is built in this issue; the external reference is required and recorded). `createVenture` **is** the G-01 pass:
+
+- requires a non-empty `opportunityRef` (the pre-G-01 opportunity brief / KI) and a non-empty `drRef` (the G-01 authorization / DR);
+- mints `V-yyyy-seq` (per-year counter, race-free under the event-chain advisory lock);
+- creates the row directly in **`trend_analysis`** (stage 2 — the first persisted state);
+- records `venture.created` with `entry_gate_id: "G-01"`, `opportunity_ref`, `dr_ref`, and the birth state;
+- stores both references on the row (`opportunity_ref`, `entry_dr_ref` — both `NOT NULL` + non-empty CHECKs).
 
 ## The single venture record
 
-One row per venture in `ventures` — identity, current macro-state, the analysis checklist, and archival fields. The row is a queryable **projection**; the append-only [event log](EVENT_LOG.md) is the audit source of truth, and every mutation records its event in the same transaction (the issue-#7 discipline).
+One row per venture in `ventures` — identity, birth references, current macro-state, the analysis checklist, and archival fields. The row is a queryable **projection**; the append-only [event log](EVENT_LOG.md) is the audit source of truth, and every mutation records its event in the same transaction (the issue-#7 discipline).
 
 | Column | Notes |
 |---|---|
-| `id` | `V-yyyy-seq` (DB CHECK on format); per-year sequence via `venture_counters`, assigned race-free under the event-chain advisory lock |
+| `id` | `V-yyyy-seq` (DB CHECK on format) |
 | `name` | display name |
-| `state` | one of the nine states below (DB CHECK) |
-| `analysis_checklist` | JSONB `{item: {completed_at, actor, evidence_ref}}`; keys restricted by CHECK to the five canonical items |
+| `state` | one of the eight states below (DB CHECK — `opportunity_discovery` is not among them) |
+| `opportunity_ref` | the pre-G-01 opportunity brief / KI the venture was minted from (`NOT NULL`, non-empty CHECK) |
+| `entry_dr_ref` | the G-01 authorization that minted it (`NOT NULL`, non-empty CHECK) |
+| `analysis_checklist` | JSONB `{item: {completed_at, actor, evidence_ref}}`; keys restricted by CHECK to the five items, and **every entry must carry a non-empty `evidence_ref`** (immutable-function CHECK) |
 | `post_mortem_ref`, `archived_reason`, `archived_at` | kill-path fields; DB CHECKs force all three when `state='archived'` and none otherwise |
 | `created_at`, `updated_at` | timestamps |
 
@@ -21,72 +35,67 @@ One row per venture in `ventures` — identity, current macro-state, the analysi
 
 | State | Part V stages | Entered via |
 |---|---|---|
-| `opportunity_discovery` | 1 — Opportunity Discovery | creation (standing entry; not a transition) |
-| `trend_analysis` | 2 — Trend Analysis | **G-01** (Opportunity Intake) |
-| `research` | 3 — Research | **G-01** — intra-envelope handoff (see below) |
+| *(none — pre-venture)* | 1 — Opportunity Discovery | n/a: a KI in the opportunity backlog, not a venture |
+| `trend_analysis` | 2 — Trend Analysis | **G-01 pass = venture creation** (Opportunity Intake) |
+| `research` | 3 — Research | **handoff** riding the original G-01 grant (see below) |
 | `validation` | 4 — Validation | **G-02** (Research Commit) |
 | `analysis` | 5–9 — Customer Discovery, Competitive Analysis, Financial Modeling, Risk Analysis, Legal Analysis (checklist) | **G-03** (Validation Verdict) |
-| `prototype` | 10 — Prototype | **G-04** (Prototype Commit; conjunctive — all five items required) |
+| `prototype` | 10 — Prototype | **G-04** (Prototype Commit; conjunctive — five filed artifacts required) |
 | `mvp` | 11 — MVP | **G-05** (MVP Commit) |
 | `pmf` | 12 — Product-Market Fit | **G-06** (Launch / GTM) |
 | `archived` | terminal | **kill** from any non-terminal state |
 
 The machine is strictly linear: one legal exit per state, no skips, no backward moves, no repeats. `pmf` has no outgoing advance — its next transition (G-07, venture formation) belongs to a later issue.
 
-**The stage 2→3 handoff.** Part V Stage 2 defines Trend Analysis → Research as an *intra-envelope handoff inside the G-01 research grant* — there is no separate decision gate. Because the issue requires "state changes only via gate passes or kill", that transition **cites G-01** as its authorization: Appendix C itself defines G-01 as admitting to "Trend Analysis/Research" jointly, so the grant that authorizes stage 2 also authorizes stage 3. This is a mechanical reconciliation, not a rule change.
+## Transition kinds: gate pass vs handoff
 
-## Transition rules
+The transition table is **typed** (`kind: "gate_pass" | "handoff"`), and exactly one transition is a handoff:
 
-`advanceStage` is the only way to move forward; `killVenture` the only way to terminate. Each validates, inside one serialized transaction:
+- **`trend_analysis → research` is an intra-envelope handoff, not a second gate pass.** Part V Stage 2: "Trend Analysis → Research is an intra-envelope handoff inside the G-01 research grant"; Appendix C's G-01 admits to "Trend Analysis/Research" jointly. It is executed by **`handoffStage`**, which takes **no gate and no DR** — by construction the caller cannot present a gate for it. It reuses the venture's stored G-01 authorization (`entry_dr_ref`) and records a distinct **`venture.stage_handoff`** event with `transition_kind: "handoff"`, `authorization_gate_id: "G-01"`, and `authorization_ref: <the original G-01 reference>`. No new `gate_passed`-style record, no new approval, no new DR.
+- Every other advance is a **gate pass** via `advanceStage`, which rejects handoff transitions (and vice versa: `handoffStage` rejects gate-pass transitions).
 
-- the venture exists and is not `archived`;
-- the caller's `expectedFrom` equals the row's actual state (stale/concurrent attempts are rejected);
-- the transition is the next legal one, and `gateId` is **exactly** that transition's gate;
-- leaving `analysis` requires **all five** checklist items complete (G-04 is conjunctive per Part V Phase B);
-- a non-empty `drRef` (the authorizing DR / grant reference), recorded in the event payload.
+`advanceStage` validates, inside one serialized transaction: the venture exists and is not `archived`; the caller's `expectedFrom` equals the row's actual state; the transition is the next legal one **of kind `gate_pass`**; `gateId` is **exactly** that transition's gate; leaving `analysis` requires all five artifacts (below); and a non-empty `drRef`, recorded in the event payload.
 
 **Boundary with issue #9 (gate system v0):** the full gate-pass protocol — DR validated against `decision-record.schema.json`, pre-registered kill criteria, an approval event by a user holding the `approver` role, proposer≠approver — is P0-8/#9. Here the gate id is matched exactly and the authorization reference is required and recorded, so #9 can layer full validation on top without changing this module's shape.
 
-## The analysis block (stages 5–9)
+## The analysis block (stages 5–9): real artifacts, not checkmarks
 
 - One macro-state (`analysis`); five items: `customer_discovery`, `competitive_analysis`, `financial_modeling`, `risk_analysis`, `legal_analysis` — **all mandatory**.
-- `completeAnalysisItem` files one item (actor + timestamp + optional evidence ref), only while the venture is in `analysis`; a duplicate completion is rejected (an output is filed once).
-- Completing items **never changes the macro-state** — the block "completes" when all five outputs are filed, but exiting is only the G-04 pass (a separate, conjunctive decision).
-- Every completion is audited as a `venture.analysis_item_completed` event (a filed analysis output is a real mutation of record).
+- `completeAnalysisItem` files one item's **output**: it requires a **non-empty `evidenceRef`** (the artifact reference G-04's "full analysis pack" is made of). An empty/whitespace reference is rejected before the transaction — no event, no change. The reference is recorded in the `venture.analysis_item_completed` event and in the row.
+- Only while the venture is in `analysis`; a duplicate completion is rejected (an output is filed once).
+- Completing items **never changes the macro-state** — exit is only the conjunctive G-04 pass, which re-checks that **all five entries exist and each carries a non-empty artifact reference**.
+- DB backstop: an immutable-function CHECK makes a checklist entry without a non-empty `evidence_ref` impossible even for a direct write.
 
 ## Kill path
 
-From any non-terminal state, `killVenture` moves the venture to `archived` with a **mandatory non-empty `post_mortem_ref`**, a reason, and the acting user. A kill without a post-mortem reference is rejected *before* the transaction — nothing changes and no event is recorded. After archiving, every further transition (advance or second kill) is rejected. DB CHECKs backstop this: an `archived` row **must** carry post-mortem/reason/timestamp, and a live row must not.
+From any non-terminal state, `killVenture` moves the venture to `archived` with a **mandatory non-empty `post_mortem_ref`**, a reason, and the acting user. A kill without a post-mortem reference is rejected *before* the transaction — nothing changes and no event is recorded. After archiving, every further transition (advance, handoff, or second kill) is rejected. DB CHECKs backstop this in both directions.
 
 ## Transactions, locks, and concurrency
 
 Same discipline and lock order as issue #7 — the event-chain advisory lock is the single serialization point, acquired first:
 
 ```
-BEGIN → appendEventTx (advisory lock)            [provisional event]
+BEGIN → advisory lock (appendEventTx, or explicitly when row data feeds the event)
       → SELECT ... FOR UPDATE on the venture row
-      → validate (existence, state, gate, checklist)
-      → UPDATE ventures
+      → validate (existence, state, kind, gate, artifacts)
+      → UPDATE ventures / INSERT venture + event
       → COMMIT          (any failure → ROLLBACK, provisional event undone)
 ```
 
-(`createVenture` takes the advisory lock explicitly first — the id comes from the per-year counter — then appends; transaction-scoped advisory locks are reentrant.)
+`createVenture` and `handoffStage` take the advisory lock explicitly first (the id counter / the stored G-01 reference feed the event payload), then append — transaction-scoped advisory locks are reentrant, so the order stays advisory → row everywhere.
 
-Consequences, all covered by tests against real Postgres with two connections:
-- two concurrent advances from the same state: exactly one commits; the loser is rejected with a *stale state* error and leaves **no** event;
-- advance vs kill: totally ordered — if the kill serializes first the advance is rejected; if the advance wins, the kill archives afterwards; `events.seq` reflects the order;
-- two concurrent kills: one archives, one is rejected; exactly one `venture.killed` event;
-- rollback tests: a failed event append leaves the state unchanged; a failed row UPDATE leaves no event.
+Covered by tests against real Postgres with two connections: two concurrent gate passes → exactly one commits (loser: *stale state*, no event); two concurrent handoffs → one wins, one `venture.stage_handoff` event; advance vs kill → totally ordered via `events.seq`, never an advance after an effective kill; two kills → one archives; rollback tests for a failed event append (gate pass and handoff), a failed row UPDATE, and a failed venture INSERT at creation.
 
 ## Events
 
-All through `appendEventTx` (never a direct `events` write; `pnpm check:eventlog` covers this module too), with `object_type: "venture"`, `object_id: <venture id>`, details in `payload`:
+All through `appendEventTx` (never a direct `events` write), with `object_type: "venture"`, `object_id: <venture id>`, details in `payload`:
 
 | Event | When | Payload |
 |---|---|---|
-| `venture.created` | creation | `name`, initial `state` |
-| `venture.stage_advanced` | gate pass | `from`, `to`, `gate_id`, `dr_ref`, `approval_ref` |
-| `venture.analysis_item_completed` | checklist item filed | `item`, `evidence_ref` |
+| `venture.created` | G-01 pass mints the venture | `name`, `state` (`trend_analysis`), `entry_gate_id` (`G-01`), `opportunity_ref`, `dr_ref` |
+| `venture.stage_advanced` | gate pass | `from`, `to`, `transition_kind: "gate_pass"`, `gate_id`, `dr_ref`, `approval_ref` |
+| `venture.stage_handoff` | the 2→3 intra-envelope handoff | `from`, `to`, `transition_kind: "handoff"`, `authorization_gate_id: "G-01"`, `authorization_ref` (the original G-01 reference) |
+| `venture.analysis_item_completed` | checklist artifact filed | `item`, `evidence_ref` (non-empty) |
 | `venture.killed` | kill → archived | `reason`, `post_mortem_ref` |
 
 `event.schema.json` is unchanged; the pending decision on promoting `venture_id`/`reversibility_class` to event-log columns remains a separate issue.
@@ -95,13 +104,13 @@ All through `appendEventTx` (never a direct `events` write; `pnpm check:eventlog
 
 ```bash
 pnpm migrate     # applies ops/migrations/0004_ventures.sql
-pnpm test        # vitest: model/pure, behavior, rollback, concurrency
+pnpm test        # vitest: model/semantic gate mapping, behavior, rollback, concurrency
 pnpm verify:events
 ```
 
 ## Known limitations (deliberate)
 
 - Stages 13–23 (G-07 onward), the operating tracks, and the orthogonal-region machinery are **not** modeled (audit §6(f): wait for stages 13–17).
-- Gate passes cite but do not yet *validate* DR content, kill criteria, or approver roles — that is issue #9.
+- Gate passes cite but do not yet *validate* DR content, kill criteria, or approver roles — that is issue #9. The opportunity backlog / KI store behind `opportunity_ref` is Part VI tooling, not this issue.
 - Actor identity is recorded, not authenticated (see [AUTH](AUTH.md)).
 - One venture at a time is the expected scale (pathfinder rule); the per-year id counter and the single advisory lock are deliberately simple.
