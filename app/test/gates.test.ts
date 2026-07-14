@@ -9,6 +9,8 @@ import {
   passStandingGate,
   gateMeta,
   digestDecisionRecordContent,
+  PIPELINE_GATES,
+  STANDING_GATES,
 } from "../src/lib/gates.js";
 import { appendEvent } from "../src/lib/eventlog.js";
 import { getVenture } from "../src/lib/venture.js";
@@ -687,6 +689,38 @@ describe("gate system v0 — content binding + reversibility", () => {
     expect(await gatePassRows(client, dr.id)).toBe(0);
   });
 
+  it("an approval event whose digest is not a string is rejected cleanly (no TypeError)", async () => {
+    const vid = await ventureTo(client, actors, "research");
+    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const forged = await forgeApprovalEvent(
+      { proposer_actor_id: actors.proposer, object_digest: 1234567890 }, // a number, not hex
+      dr.id,
+      actors.approver,
+    );
+    await expect(
+      passPipelineGate(client, {
+        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+      }),
+    ).rejects.toThrow(/carries no document digest/i);
+    expect(await gatePassRows(client, dr.id)).toBe(0);
+  });
+
+  it("an approval event with a malformed (non-SHA-256) digest string is rejected", async () => {
+    const vid = await ventureTo(client, actors, "research");
+    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const forged = await forgeApprovalEvent(
+      { proposer_actor_id: actors.proposer, object_digest: "deadbeef" }, // valid hex, wrong length
+      dr.id,
+      actors.approver,
+    );
+    await expect(
+      passPipelineGate(client, {
+        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+      }),
+    ).rejects.toThrow(/malformed document digest/i);
+    expect(await gatePassRows(client, dr.id)).toBe(0);
+  });
+
   it("a correct approval with the correct digest passes", async () => {
     const vid = await ventureTo(client, actors, "research");
     const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
@@ -873,5 +907,219 @@ describe("gate system v0 — concurrency", () => {
   it("the event-log hash chain is intact after all gate activity", async () => {
     const r = await verifyChainInDb(client);
     expect(r.ok).toBe(true);
+  });
+});
+
+describe("gate system v0 — request-snapshot immunity (whole request, not just the DR)", () => {
+  let client: pg.Client;
+  let actors: Actors;
+
+  beforeAll(async () => {
+    client = new pg.Client({ connectionString: DATABASE_URL });
+    await client.connect();
+    actors = await setupActors(client, "gs");
+  });
+  afterAll(async () => {
+    if (client) await client.end();
+  });
+
+  it("pipeline: mutating every request field after the call cannot change the pass", async () => {
+    // Two ventures at the same stage: A is the real target, B a decoy.
+    const vidA = await ventureTo(client, actors, "research");
+    const vidB = await ventureTo(client, actors, "research");
+    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const approvalEventId = await approveDR(client, actors, dr);
+    const input = {
+      gateId: "G-02",
+      ventureId: vidA,
+      decisionRecord: dr,
+      approvalEventId,
+      actor: "op-original",
+      requestedSpend: 0 as number | null,
+    };
+    // Start the pass, THEN mutate every scalar field. The function captured
+    // them synchronously before its first await, so mutations are ineffective;
+    // had it re-read `input` after an await, B would advance / the bogus
+    // approval id would reject / the mutated actor would be recorded.
+    const p = passPipelineGate(client, input);
+    input.ventureId = vidB;
+    input.approvalEventId = "EV-bogus-does-not-exist";
+    input.actor = "mallory";
+    input.gateId = "G-05";
+    const r = await p;
+
+    expect(r.ventureId).toBe(vidA);
+    expect(r.gateId).toBe("G-02");
+    expect(r.toState).toBe("validation");
+    expect((await getVenture(client, vidA))!.state).toBe("validation"); // A advanced
+    expect((await getVenture(client, vidB))!.state).toBe("research"); // B intact
+    const ev = await client.query<{
+      actor_id: string;
+      object_id: string;
+      payload: Record<string, unknown>;
+    }>("SELECT actor_id, object_id, payload FROM events WHERE id = $1", [r.eventId]);
+    expect(ev.rows[0].actor_id).toBe("op-original");
+    expect(ev.rows[0].object_id).toBe(vidA);
+    expect(ev.rows[0].payload.gate_id).toBe("G-02");
+    expect(ev.rows[0].payload.venture_id).toBe(vidA);
+    expect(ev.rows[0].payload.approval_event_id).toBe(approvalEventId);
+    const gp = await client.query<{
+      venture_id: string;
+      approval_event_id: string;
+      gate_id: string;
+    }>("SELECT venture_id, approval_event_id, gate_id FROM gate_passes WHERE dr_id = $1", [dr.id]);
+    expect(gp.rows[0].venture_id).toBe(vidA);
+    expect(gp.rows[0].approval_event_id).toBe(approvalEventId);
+    expect(gp.rows[0].gate_id).toBe("G-02");
+  });
+
+  it("G-01: mutating name/opportunityRef/approvalEventId/actor/year cannot change the mint", async () => {
+    const dr = makeDR({ gateId: "G-01", proposer: actors.proposer, approver: actors.approver });
+    const approvalEventId = await approveDR(client, actors, dr);
+    const origYear = freshYear();
+    const input = {
+      name: "original-name",
+      opportunityRef: "KI-original",
+      decisionRecord: dr,
+      approvalEventId,
+      actor: "op-original",
+      year: origYear,
+      requestedSpend: 0 as number | null,
+    };
+    const p = passG01CreateVenture(client, input);
+    input.name = "mutated-name";
+    input.opportunityRef = "KI-mutated";
+    input.approvalEventId = "EV-bogus";
+    input.actor = "mallory";
+    input.year = 9999;
+    const r = await p;
+
+    expect(r.ventureId!.startsWith(`V-${origYear}-`)).toBe(true); // original year
+    const vr = await client.query<{ name: string; opportunity_ref: string }>(
+      "SELECT name, opportunity_ref FROM ventures WHERE id = $1",
+      [r.ventureId],
+    );
+    expect(vr.rows[0].name).toBe("original-name");
+    expect(vr.rows[0].opportunity_ref).toBe("KI-original");
+    const ev = await client.query<{ actor_id: string; payload: Record<string, unknown> }>(
+      "SELECT actor_id, payload FROM events WHERE id = $1",
+      [r.eventId],
+    );
+    expect(ev.rows[0].actor_id).toBe("op-original");
+    expect(ev.rows[0].payload.opportunity_ref).toBe("KI-original");
+    expect(ev.rows[0].payload.approval_event_id).toBe(approvalEventId);
+  });
+
+  it("standing: mutating subject/ventureId/approvalEventId/actor cannot change the authorization", async () => {
+    const dr = makeDR({
+      gateId: "G-17",
+      proposer: actors.proposer,
+      approver: actors.approver,
+      killCriteria: null,
+    });
+    const approvalEventId = await approveDR(client, actors, dr);
+    const input = {
+      gateId: "G-17",
+      subjectType: "communication",
+      subjectId: "subject-original",
+      ventureId: null as string | null,
+      decisionRecord: dr,
+      approvalEventId,
+      actor: "op-original",
+      requestedSpend: 0 as number | null,
+    };
+    const p = passStandingGate(client, input);
+    input.subjectType = "data-use";
+    input.subjectId = "subject-mutated";
+    input.ventureId = "V-9999-1"; // would trigger a "venture not found" if re-read
+    input.approvalEventId = "EV-bogus";
+    input.actor = "mallory";
+    const r = await p;
+
+    const ev = await client.query<{
+      actor_id: string;
+      object_type: string;
+      object_id: string;
+      payload: Record<string, unknown>;
+    }>("SELECT actor_id, object_type, object_id, payload FROM events WHERE id = $1", [r.eventId]);
+    expect(ev.rows[0].actor_id).toBe("op-original");
+    expect(ev.rows[0].object_type).toBe("communication");
+    expect(ev.rows[0].object_id).toBe("subject-original");
+    expect(ev.rows[0].payload.subject_type).toBe("communication");
+    expect(ev.rows[0].payload.subject_id).toBe("subject-original");
+    expect(ev.rows[0].payload.venture_id).toBeNull();
+    expect(ev.rows[0].payload.approval_event_id).toBe(approvalEventId);
+    const gp = await client.query<{
+      subject_type: string;
+      subject_id: string;
+      venture_id: string | null;
+      approval_event_id: string;
+    }>(
+      "SELECT subject_type, subject_id, venture_id, approval_event_id FROM gate_passes WHERE dr_id = $1",
+      [dr.id],
+    );
+    expect(gp.rows[0].subject_type).toBe("communication");
+    expect(gp.rows[0].subject_id).toBe("subject-original");
+    expect(gp.rows[0].venture_id).toBeNull();
+    expect(gp.rows[0].approval_event_id).toBe(approvalEventId);
+  });
+});
+
+describe("gate system v0 — registry immutability at runtime", () => {
+  let client: pg.Client;
+  let actors: Actors;
+
+  beforeAll(async () => {
+    client = new pg.Client({ connectionString: DATABASE_URL });
+    await client.connect();
+    actors = await setupActors(client, "gr");
+  });
+  afterAll(async () => {
+    if (client) await client.end();
+  });
+
+  it("a gate's metadata is frozen — reversibility_class cannot be re-classified", () => {
+    const g5 = gateMeta("G-05");
+    expect(g5.reversibility_class).toBe("R3");
+    // Frozen under ESM strict mode: the write throws and cannot reach the map.
+    expect(() => {
+      (g5 as { reversibility_class: string }).reversibility_class = "R1";
+    }).toThrow();
+    // A second, independent lookup still sees the canonical class.
+    expect(gateMeta("G-05").reversibility_class).toBe("R3");
+  });
+
+  it("the gate lists are frozen — no gate can be added or removed at runtime", () => {
+    expect(() => {
+      (PIPELINE_GATES as string[]).push("G-08");
+    }).toThrow();
+    expect(() => {
+      (PIPELINE_GATES as string[]).splice(0, 1); // try to remove G-01
+    }).toThrow();
+    expect(() => {
+      (STANDING_GATES as string[])[0] = "G-99";
+    }).toThrow();
+    expect(PIPELINE_GATES.includes("G-08")).toBe(false);
+    expect(PIPELINE_GATES).toContain("G-01");
+    expect(STANDING_GATES).toContain("G-17");
+  });
+
+  it("runtime tampering cannot implement G-08 nor de-classify G-01", async () => {
+    // Best-effort tamper attempts — all throw on the frozen structures; the
+    // backing Map is module-private and unreachable from here by design.
+    try {
+      (PIPELINE_GATES as string[]).push("G-08");
+    } catch {
+      /* frozen */
+    }
+    // G-08 is still rejected as not implemented.
+    const dr8 = makeDR({ gateId: "G-08", proposer: actors.proposer, approver: actors.approver });
+    await expect(
+      passGate(client, { gateId: "G-08", decisionRecord: dr8, approvalEventId: "EV-x", actor: "op" }),
+    ).rejects.toThrow(/not implemented in gate system v0/i);
+    // G-01 is still the pipeline entry gate: a full mint still works.
+    const minted = await mintVenture(client, actors);
+    expect(minted.ventureId!.startsWith("V-")).toBe(true);
+    expect(PIPELINE_GATES).toContain("G-01");
   });
 });

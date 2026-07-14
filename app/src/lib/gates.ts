@@ -72,35 +72,67 @@ type Queryable = Client | PoolClient;
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 interface GateMeta {
-  id: string;
-  name: string;
-  section: "standing" | "pipeline";
-  reversibility_class: string;
-  human_approval_required: boolean;
-  mandatory_kill_criteria_required: boolean;
+  readonly id: string;
+  readonly name: string;
+  readonly section: "standing" | "pipeline";
+  readonly reversibility_class: string;
+  readonly human_approval_required: boolean;
+  readonly mandatory_kill_criteria_required: boolean;
 }
 
+// The registry is IMMUTABLE at runtime: every GateMeta is frozen at load, the
+// backing Map is a module-private const, and it is never exposed by reference.
+// A caller cannot add, remove, or replace a gate, nor mutate a gate's fields
+// (a write to `gateMeta(id).reversibility_class` throws under ESM strict mode).
+// This is the classification's single source of truth — Appendix C via
+// schemas/data/gates.json — so a live process cannot re-classify a gate.
 const GATES_REGISTRY: ReadonlyMap<string, GateMeta> = new Map(
   (
     JSON.parse(
       readFileSync(join(REPO_ROOT, "schemas", "data", "gates.json"), "utf8"),
     ) as { gates: GateMeta[] }
-  ).gates.map((g) => [g.id, g]),
+  ).gates.map((g) => [g.id, Object.freeze({ ...g }) as GateMeta]),
 );
 
 /** Pipeline gates in scope: each corresponds to exactly one venture effect. */
-export const PIPELINE_GATES: readonly string[] = ["G-01", "G-02", "G-03", "G-04", "G-05", "G-06"];
+export const PIPELINE_GATES: readonly string[] = Object.freeze([
+  "G-01",
+  "G-02",
+  "G-03",
+  "G-04",
+  "G-05",
+  "G-06",
+]);
 /** Standing authorization gates in scope: authorize a subject, no transition. */
-export const STANDING_GATES: readonly string[] = ["G-17", "G-18"];
+export const STANDING_GATES: readonly string[] = Object.freeze(["G-17", "G-18"]);
 /** Recognized pre-entity gate that is NOT passable: emergency stop (issue #12). */
 export const STOP_GATE = "G-00";
 
+/**
+ * Look up a gate's metadata. The returned object is the frozen registry entry —
+ * mutating it throws (ESM strict mode) and can never alter the internal
+ * registry — so callers get a read-only view of the canonical classification.
+ */
 export function gateMeta(gateId: string): GateMeta {
   const meta = GATES_REGISTRY.get(gateId);
   if (!meta) {
     throw new Error(`unknown gate: '${gateId}' is not in schemas/data/gates.json`);
   }
   return meta;
+}
+
+/**
+ * Require an auditable request field to be a non-empty, non-whitespace string
+ * and return it VERBATIM (identifiers are never silently rewritten — an id with
+ * internal spaces is preserved, only its emptiness is rejected). Used to
+ * snapshot request fields synchronously, before the first await, so a later
+ * mutation of the caller's object cannot change the pass.
+ */
+function requireField(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
 }
 
 function implementedMeta(gateId: string): GateMeta {
@@ -242,7 +274,9 @@ async function validateApprovalTx(
     actor_id: string;
     object_type: string | null;
     object_id: string | null;
-    payload: { proposer_actor_id?: string; object_digest?: string } | null;
+    // object_digest is untyped JSONB: a forged event could carry a number,
+    // object, or malformed string — so it is `unknown` and guarded below.
+    payload: { proposer_actor_id?: string; object_digest?: unknown } | null;
   }>(
     "SELECT event_type, actor_id, object_type, object_id, payload FROM events WHERE id = $1",
     [approvalEventId],
@@ -276,14 +310,22 @@ async function validateApprovalTx(
       `approval event proposer mismatch: event records proposer '${e.payload?.proposer_actor_id ?? "none"}', DR proposer is '${dr.proposer}'`,
     );
   }
-  if (!e.payload?.object_digest?.trim()) {
+  // Guard the type BEFORE any string method: a number/object/whitespace digest
+  // rejects cleanly here, it never throws a TypeError.
+  const digest = e.payload?.object_digest;
+  if (typeof digest !== "string" || !digest.trim()) {
     throw new Error(
       `approval event ${approvalEventId} carries no document digest (object_digest) — the approval is not bound to the DR content`,
     );
   }
-  if (e.payload.object_digest !== snap.digest) {
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
     throw new Error(
-      `approval digest mismatch: the approved decision record content differs from the submitted document (approved ${e.payload.object_digest.slice(0, 12)}…, submitted ${snap.digest.slice(0, 12)}…)`,
+      `approval event ${approvalEventId} has a malformed document digest (object_digest must be a 64-char SHA-256 hex string)`,
+    );
+  }
+  if (digest !== snap.digest) {
+    throw new Error(
+      `approval digest mismatch: the approved decision record content differs from the submitted document (approved ${digest.slice(0, 12)}…, submitted ${snap.digest.slice(0, 12)}…)`,
     );
   }
   const ap = await client.query<{
@@ -420,28 +462,45 @@ export async function passG01CreateVenture(
   },
 ): Promise<GatePassResult> {
   const meta = implementedMeta(ENTRY_GATE);
-  rejectSpend(input.requestedSpend);
-  if (!input.opportunityRef?.trim()) {
-    throw new Error("opportunityRef (the pre-G-01 opportunity brief / KI) must be non-empty");
-  }
-  // Immutable snapshot BEFORE the first await: later mutations of the
-  // caller's object cannot change the pass; input.decisionRecord is never
-  // read again.
-  const snap = snapshotDecisionRecord(meta, input.decisionRecord);
+  // FULL request snapshot BEFORE the first await. Each input field is read
+  // exactly once here (into locals, then a frozen object); after this the
+  // mutable `input` is never touched again, so a later mutation of the
+  // caller's object — of ANY field, not just the DR — cannot change the pass.
+  const rawName = input.name;
+  const rawOpportunityRef = input.opportunityRef;
+  const rawApprovalEventId = input.approvalEventId;
+  const rawActor = input.actor;
+  const rawYear = input.year;
+  const rawSpend = input.requestedSpend;
+  const rawDr = input.decisionRecord;
+  const req = Object.freeze({
+    name: requireField(rawName, "name"),
+    opportunityRef: requireField(
+      rawOpportunityRef,
+      "opportunityRef (the pre-G-01 opportunity brief / KI)",
+    ),
+    approvalEventId: requireField(rawApprovalEventId, "approvalEventId"),
+    actor: requireField(rawActor, "actor"),
+    year: rawYear,
+    requestedSpend: rawSpend ?? null,
+    snapshot: snapshotDecisionRecord(meta, rawDr),
+  });
+  rejectSpend(req.requestedSpend);
+  const snap = req.snapshot;
   const dr = snap.document;
   return runGateTx(client, async () => {
-    const actors = await validateApprovalTx(client, snap, input.approvalEventId);
+    const actors = await validateApprovalTx(client, snap, req.approvalEventId);
     const minted = await mintVentureAtG01Tx(client, {
-      name: input.name,
-      opportunityRef: input.opportunityRef,
+      name: req.name,
+      opportunityRef: req.opportunityRef,
       drRef: dr.id,
-      year: input.year,
+      year: req.year,
     });
     const eventId = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),
       actor_type: "human",
-      actor_id: input.actor,
+      actor_id: req.actor,
       event_type: "gate_passed",
       object_type: "venture",
       object_id: minted.id,
@@ -449,7 +508,7 @@ export async function passG01CreateVenture(
         gate_id: meta.id,
         gate_name: meta.name,
         dr_id: dr.id,
-        approval_event_id: input.approvalEventId,
+        approval_event_id: req.approvalEventId,
         proposer_actor_id: actors.proposer,
         approver_actor_id: actors.approver,
         kill_criteria: dr.kill_criteria ?? [],
@@ -460,13 +519,13 @@ export async function passG01CreateVenture(
         to_state: minted.state,
         venture_id: minted.id,
         effect: "venture_created",
-        opportunity_ref: input.opportunityRef,
+        opportunity_ref: req.opportunityRef,
       },
     });
     await insertGatePassTx(client, {
       gateId: meta.id,
       drId: dr.id,
-      approvalEventId: input.approvalEventId,
+      approvalEventId: req.approvalEventId,
       gateEventId: eventId.id,
       ventureId: minted.id,
       proposer: actors.proposer,
@@ -503,40 +562,53 @@ export async function passPipelineGate(
     requestedSpend?: number | null;
   },
 ): Promise<GatePassResult> {
-  const meta = implementedMeta(input.gateId);
-  if (!PIPELINE_GATES.includes(input.gateId)) {
-    throw new Error(
-      `gate ${input.gateId} (${meta.name}) is a standing gate — use passStandingGate()`,
-    );
+  const gateId = requireField(input.gateId, "gateId");
+  const meta = implementedMeta(gateId);
+  if (!PIPELINE_GATES.includes(gateId)) {
+    throw new Error(`gate ${gateId} (${meta.name}) is a standing gate — use passStandingGate()`);
   }
-  if (input.gateId === ENTRY_GATE) {
+  if (gateId === ENTRY_GATE) {
     throw new Error(
       "G-01 mints the venture — use passG01CreateVenture() (there is no venture to advance yet)",
     );
   }
-  rejectSpend(input.requestedSpend);
-  // Immutable snapshot BEFORE the first await (see snapshotDecisionRecord).
-  const snap = snapshotDecisionRecord(meta, input.decisionRecord);
+  // FULL request snapshot BEFORE the first await (see passG01CreateVenture):
+  // every field is read once here, then `input` is never touched again.
+  const rawVentureId = input.ventureId;
+  const rawApprovalEventId = input.approvalEventId;
+  const rawActor = input.actor;
+  const rawSpend = input.requestedSpend;
+  const rawDr = input.decisionRecord;
+  const req = Object.freeze({
+    gateId,
+    ventureId: requireField(rawVentureId, "ventureId"),
+    approvalEventId: requireField(rawApprovalEventId, "approvalEventId"),
+    actor: requireField(rawActor, "actor"),
+    requestedSpend: rawSpend ?? null,
+    snapshot: snapshotDecisionRecord(meta, rawDr),
+  });
+  rejectSpend(req.requestedSpend);
+  const snap = req.snapshot;
   const dr = snap.document;
   return runGateTx(client, async () => {
-    const actors = await validateApprovalTx(client, snap, input.approvalEventId);
+    const actors = await validateApprovalTx(client, snap, req.approvalEventId);
     const effect = await advanceVentureForGateTx(client, {
-      ventureId: input.ventureId,
+      ventureId: req.ventureId,
       gateId: meta.id,
     });
     const eventId = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),
       actor_type: "human",
-      actor_id: input.actor,
+      actor_id: req.actor,
       event_type: "gate_passed",
       object_type: "venture",
-      object_id: input.ventureId,
+      object_id: req.ventureId,
       payload: {
         gate_id: meta.id,
         gate_name: meta.name,
         dr_id: dr.id,
-        approval_event_id: input.approvalEventId,
+        approval_event_id: req.approvalEventId,
         proposer_actor_id: actors.proposer,
         approver_actor_id: actors.approver,
         kill_criteria: dr.kill_criteria ?? [],
@@ -545,16 +617,16 @@ export async function passPipelineGate(
         transition_kind: "gate_pass",
         from_state: effect.from,
         to_state: effect.to,
-        venture_id: input.ventureId,
+        venture_id: req.ventureId,
         effect: "stage_advanced",
       },
     });
     await insertGatePassTx(client, {
       gateId: meta.id,
       drId: dr.id,
-      approvalEventId: input.approvalEventId,
+      approvalEventId: req.approvalEventId,
       gateEventId: eventId.id,
-      ventureId: input.ventureId,
+      ventureId: req.ventureId,
       proposer: actors.proposer,
       approver: actors.approver,
     });
@@ -562,7 +634,7 @@ export async function passPipelineGate(
       gateId: meta.id,
       eventId: eventId.id,
       drId: dr.id,
-      ventureId: input.ventureId,
+      ventureId: req.ventureId,
       fromState: effect.from,
       toState: effect.to,
     };
@@ -591,40 +663,64 @@ export async function passStandingGate(
     requestedSpend?: number | null;
   },
 ): Promise<GatePassResult> {
-  const meta = implementedMeta(input.gateId);
-  if (!STANDING_GATES.includes(input.gateId)) {
+  const gateId = requireField(input.gateId, "gateId");
+  const meta = implementedMeta(gateId);
+  if (!STANDING_GATES.includes(gateId)) {
     throw new Error(
-      `gate ${input.gateId} (${meta.name}) is a pipeline gate — use passPipelineGate() / passG01CreateVenture()`,
+      `gate ${gateId} (${meta.name}) is a pipeline gate — use passPipelineGate() / passG01CreateVenture()`,
     );
   }
-  rejectSpend(input.requestedSpend);
-  if (!input.subjectType?.trim() || !input.subjectId?.trim()) {
+  // FULL request snapshot BEFORE the first await (see passG01CreateVenture):
+  // read each field once, validate, then never touch `input` again.
+  const rawSubjectType = input.subjectType;
+  const rawSubjectId = input.subjectId;
+  const rawVentureId = input.ventureId;
+  const rawApprovalEventId = input.approvalEventId;
+  const rawActor = input.actor;
+  const rawSpend = input.requestedSpend;
+  const rawDr = input.decisionRecord;
+  if (
+    typeof rawSubjectType !== "string" ||
+    !rawSubjectType.trim() ||
+    typeof rawSubjectId !== "string" ||
+    !rawSubjectId.trim()
+  ) {
     throw new Error(
-      `standing gate ${input.gateId} requires non-empty subjectType and subjectId (it authorizes a subject, not a venture transition)`,
+      `standing gate ${gateId} requires non-empty subjectType and subjectId (it authorizes a subject, not a venture transition)`,
     );
   }
-  // Immutable snapshot BEFORE the first await (see snapshotDecisionRecord).
-  const snap = snapshotDecisionRecord(meta, input.decisionRecord);
+  const req = Object.freeze({
+    gateId,
+    subjectType: rawSubjectType,
+    subjectId: rawSubjectId,
+    ventureId: rawVentureId == null ? null : requireField(rawVentureId, "ventureId"),
+    approvalEventId: requireField(rawApprovalEventId, "approvalEventId"),
+    actor: requireField(rawActor, "actor"),
+    requestedSpend: rawSpend ?? null,
+    snapshot: snapshotDecisionRecord(meta, rawDr),
+  });
+  rejectSpend(req.requestedSpend);
+  const snap = req.snapshot;
   const dr = snap.document;
   return runGateTx(client, async () => {
-    const actors = await validateApprovalTx(client, snap, input.approvalEventId);
-    if (input.ventureId) {
-      const v = await client.query("SELECT 1 FROM ventures WHERE id = $1", [input.ventureId]);
-      if (!v.rows.length) throw new Error(`venture not found: ${input.ventureId}`);
+    const actors = await validateApprovalTx(client, snap, req.approvalEventId);
+    if (req.ventureId) {
+      const v = await client.query("SELECT 1 FROM ventures WHERE id = $1", [req.ventureId]);
+      if (!v.rows.length) throw new Error(`venture not found: ${req.ventureId}`);
     }
     const eventId = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),
       actor_type: "human",
-      actor_id: input.actor,
+      actor_id: req.actor,
       event_type: "gate_passed",
-      object_type: input.subjectType,
-      object_id: input.subjectId,
+      object_type: req.subjectType,
+      object_id: req.subjectId,
       payload: {
         gate_id: meta.id,
         gate_name: meta.name,
         dr_id: dr.id,
-        approval_event_id: input.approvalEventId,
+        approval_event_id: req.approvalEventId,
         proposer_actor_id: actors.proposer,
         approver_actor_id: actors.approver,
         kill_criteria: dr.kill_criteria ?? null,
@@ -633,19 +729,19 @@ export async function passStandingGate(
         transition_kind: "authorization", // standing: no venture transition
         from_state: null,
         to_state: null,
-        venture_id: input.ventureId ?? null,
-        subject_type: input.subjectType,
-        subject_id: input.subjectId,
+        venture_id: req.ventureId ?? null,
+        subject_type: req.subjectType,
+        subject_id: req.subjectId,
       },
     });
     await insertGatePassTx(client, {
       gateId: meta.id,
       drId: dr.id,
-      approvalEventId: input.approvalEventId,
+      approvalEventId: req.approvalEventId,
       gateEventId: eventId.id,
-      ventureId: input.ventureId ?? null,
-      subjectType: input.subjectType,
-      subjectId: input.subjectId,
+      ventureId: req.ventureId ?? null,
+      subjectType: req.subjectType,
+      subjectId: req.subjectId,
       proposer: actors.proposer,
       approver: actors.approver,
     });
@@ -653,7 +749,7 @@ export async function passStandingGate(
       gateId: meta.id,
       eventId: eventId.id,
       drId: dr.id,
-      ventureId: input.ventureId ?? null,
+      ventureId: req.ventureId ?? null,
       fromState: null,
       toState: null,
     };
@@ -686,38 +782,56 @@ export async function passGate(
     subjectId?: string;
   },
 ): Promise<GatePassResult> {
-  implementedMeta(input.gateId); // unknown / not-implemented / G-00 rejected here
-  if (input.gateId === ENTRY_GATE) {
-    return passG01CreateVenture(client, {
-      name: input.name ?? "",
-      opportunityRef: input.opportunityRef ?? "",
-      decisionRecord: input.decisionRecord,
-      approvalEventId: input.approvalEventId,
-      actor: input.actor,
-      year: input.year,
-      requestedSpend: input.requestedSpend,
-    });
-  }
-  if (PIPELINE_GATES.includes(input.gateId)) {
-    if (!input.ventureId) throw new Error(`gate ${input.gateId} requires a ventureId`);
-    return passPipelineGate(client, {
-      gateId: input.gateId,
-      ventureId: input.ventureId,
-      decisionRecord: input.decisionRecord,
-      approvalEventId: input.approvalEventId,
-      actor: input.actor,
-      requestedSpend: input.requestedSpend,
-    });
-  }
-  return passStandingGate(client, {
-    gateId: input.gateId,
-    subjectType: input.subjectType ?? "",
-    subjectId: input.subjectId ?? "",
-    ventureId: input.ventureId ?? null,
+  const gateId = requireField(input.gateId, "gateId");
+  implementedMeta(gateId); // unknown / not-implemented / G-00 rejected here
+  // Capture the whole request once, synchronously, before delegating. The
+  // dispatcher has no await of its own, and each pass function snapshots its
+  // arguments synchronously before ITS first await, so the entire chain reads
+  // the caller's fields once — a later mutation cannot affect the pass.
+  const req = Object.freeze({
+    gateId,
     decisionRecord: input.decisionRecord,
     approvalEventId: input.approvalEventId,
     actor: input.actor,
     requestedSpend: input.requestedSpend,
+    name: input.name,
+    opportunityRef: input.opportunityRef,
+    year: input.year,
+    ventureId: input.ventureId,
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+  });
+  if (gateId === ENTRY_GATE) {
+    return passG01CreateVenture(client, {
+      name: req.name ?? "",
+      opportunityRef: req.opportunityRef ?? "",
+      decisionRecord: req.decisionRecord,
+      approvalEventId: req.approvalEventId,
+      actor: req.actor,
+      year: req.year,
+      requestedSpend: req.requestedSpend,
+    });
+  }
+  if (PIPELINE_GATES.includes(gateId)) {
+    if (req.ventureId == null) throw new Error(`gate ${gateId} requires a ventureId`);
+    return passPipelineGate(client, {
+      gateId,
+      ventureId: req.ventureId,
+      decisionRecord: req.decisionRecord,
+      approvalEventId: req.approvalEventId,
+      actor: req.actor,
+      requestedSpend: req.requestedSpend,
+    });
+  }
+  return passStandingGate(client, {
+    gateId,
+    subjectType: req.subjectType ?? "",
+    subjectId: req.subjectId ?? "",
+    ventureId: req.ventureId ?? null,
+    decisionRecord: req.decisionRecord,
+    approvalEventId: req.approvalEventId,
+    actor: req.actor,
+    requestedSpend: req.requestedSpend,
   });
 }
 
