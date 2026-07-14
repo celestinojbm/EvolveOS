@@ -8,12 +8,12 @@ Canonical sources live in **one place each**: the states, the stage 1–12 mappi
 
 > "Venture IDs are minted at G-01 pass. Pre-G-01 opportunity briefs are not ventures; they are knowledge items (Part VI) in the opportunity backlog."
 
-**Stage 1 (Opportunity Discovery) is pre-venture:** no `ventures` row, no `V-…` id — the opportunity lives as a knowledge item in the backlog (no KI store is built in this issue; the external reference is required and recorded). `createVenture` **is** the G-01 pass:
+**Stage 1 (Opportunity Discovery) is pre-venture:** no `ventures` row, no `V-…` id — the opportunity lives as a knowledge item in the backlog (no KI store is built in this issue; the external reference is required and recorded). Since issue #9, the G-01 pass is executed by **`passG01CreateVenture` in [`gates.ts`](../app/src/lib/gates.ts)** — the single atomic operation that validates the full gate protocol AND mints the venture (see [GATE_SYSTEM](GATE_SYSTEM.md)). It:
 
 - requires a non-empty `opportunityRef` (the pre-G-01 opportunity brief / KI) and a non-empty `drRef` (the G-01 authorization / DR);
 - mints `V-yyyy-seq` (per-year counter, race-free under the event-chain advisory lock);
 - creates the row directly in **`trend_analysis`** (stage 2 — the first persisted state);
-- records `venture.created` with `entry_gate_id: "G-01"`, `opportunity_ref`, `dr_ref`, and the birth state;
+- records exactly **one `gate_passed` event** (`effect: venture_created`, `from_state: null`, `to_state: trend_analysis`, `opportunity_ref`, `dr_id`) — there is no separate `venture.created` event since issue #9;
 - stores both references on the row (`opportunity_ref`, `entry_dr_ref` — both `NOT NULL` + non-empty CHECKs).
 
 ## The single venture record
@@ -56,7 +56,7 @@ The transition table is **typed** (`kind: "gate_pass" | "handoff"`), and exactly
 
 `advanceStage` validates, inside one serialized transaction: the venture exists and is not `archived`; the caller's `expectedFrom` equals the row's actual state; the transition is the next legal one **of kind `gate_pass`**; `gateId` is **exactly** that transition's gate; leaving `analysis` requires all five artifacts (below); and a non-empty `drRef`, recorded in the event payload.
 
-**Boundary with issue #9 (gate system v0):** the full gate-pass protocol — DR validated against `decision-record.schema.json`, pre-registered kill criteria, an approval event by a user holding the `approver` role, proposer≠approver — is P0-8/#9. Here the gate id is matched exactly and the authorization reference is required and recorded, so #9 can layer full validation on top without changing this module's shape.
+**Gate protocol (issue #9, implemented):** the full gate-pass protocol — DR validated against `decision-record.schema.json`, pre-registered kill criteria, approval evidence by a user holding the `approver` role, proposer≠approver — is enforced by `gates.ts` on every pass. See [GATE_SYSTEM](GATE_SYSTEM.md).
 
 ## The analysis block (stages 5–9): real artifacts, not checkmarks
 
@@ -92,8 +92,7 @@ All through `appendEventTx` (never a direct `events` write), with `object_type: 
 
 | Event | When | Payload |
 |---|---|---|
-| `venture.created` | G-01 pass mints the venture | `name`, `state` (`trend_analysis`), `entry_gate_id` (`G-01`), `opportunity_ref`, `dr_ref` |
-| `venture.stage_advanced` | gate pass | `from`, `to`, `transition_kind: "gate_pass"`, `gate_id`, `dr_ref`, `approval_ref` |
+| `gate_passed` | G-01 mint and every G-02…G-06 advance (emitted by `gates.ts`; replaces the pre-#9 `venture.created` / `venture.stage_advanced`) | `gate_id`, `gate_name`, `dr_id`, `approval_event_id`, actors, `kill_criteria`, `transition_kind: "gate_pass"`, `from_state`, `to_state`, `venture_id`, `effect` |
 | `venture.stage_handoff` | the 2→3 intra-envelope handoff | `from`, `to`, `transition_kind: "handoff"`, `authorization_gate_id: "G-01"`, `authorization_ref` (the original G-01 reference) |
 | `venture.analysis_item_completed` | checklist artifact filed | `item`, `evidence_ref` (non-empty) |
 | `venture.killed` | kill → archived | `reason`, `post_mortem_ref` |
@@ -111,6 +110,6 @@ pnpm verify:events
 ## Known limitations (deliberate)
 
 - Stages 13–23 (G-07 onward), the operating tracks, and the orthogonal-region machinery are **not** modeled (audit §6(f): wait for stages 13–17).
-- Gate passes cite but do not yet *validate* DR content, kill criteria, or approver roles — that is issue #9. The opportunity backlog / KI store behind `opportunity_ref` is Part VI tooling, not this issue.
+- The opportunity backlog / KI store behind `opportunity_ref` is Part VI tooling (a later issue); DR persistence/immutability is issue #10.
 - Actor identity is recorded, not authenticated (see [AUTH](AUTH.md)).
 - One venture at a time is the expected scale (pathfinder rule); the per-year id counter and the single advisory lock are deliberately simple.

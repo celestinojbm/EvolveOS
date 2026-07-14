@@ -56,6 +56,9 @@ jobs:
       - name: Every event write goes through the eventlog module
         run: pnpm check:eventlog
 
+      - name: Gate passes have a single writer (no gate-system bypass)
+        run: pnpm check:gates
+
       - name: Migrations apply to a clean DB
         run: pnpm migrate
 
