@@ -55,6 +55,7 @@ The specification is converted into an executable plan under [`docs/`](docs/):
 | [User / Role Model](docs/AUTH.md) | Roles (operator/approver/viewer) + proposer≠approver enforced at the data layer, all logged — Phase 0 issue [#7](https://github.com/celestinojbm/EvolveOS/issues/7) |
 | [Venture State Machine](docs/VENTURE_STATE_MACHINE.md) | Single venture record + stages 1–12 as a gated linear machine with the 5–9 analysis checklist and kill path — Phase 0 issue [#8](https://github.com/celestinojbm/EvolveOS/issues/8) |
 | [Gate System](docs/GATE_SYSTEM.md) | Gate pass protocol v0: registry as data, DR + approval evidence + kill criteria, exactly one `gate_passed` per pass — Phase 0 issue [#9](https://github.com/celestinojbm/EvolveOS/issues/9) |
+| [Decision Records](docs/DECISION_RECORDS.md) | Create/validate/file (immutable) DRs with `DR-yyyy-seq` ids, linked amendments, one shared canonicalization/digest, and a deterministic ≤2-page brief — Phase 0 issue [#10](https://github.com/celestinojbm/EvolveOS/issues/10) |
 
 **Continuous integration.** Every push and pull request runs `scripts/` spec-consistency checks (standard-library Python, no dependencies): expected files exist, gate citations stay within `G-00…G-18`, agent references resolve to Appendix B, canonical taxonomies are complete, internal links resolve, and no placeholders leak in. Run them locally with `python scripts/run_all_checks.py`. See [Consistency Checks](docs/CONSISTENCY_CHECKS.md).
 

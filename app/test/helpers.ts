@@ -1,16 +1,21 @@
 /**
- * Shared test helpers: actors with roles, in-memory Decision Records, approval
- * evidence, and full-protocol gate passes (the production path via gates.ts).
+ * Shared test helpers: actors with roles, Decision Records FILED into the
+ * immutable store (issue #10), approval evidence bound to the filed digest, and
+ * full-protocol gate passes that reference the DR by id (the production path via
+ * gates.ts).
  */
 import pg from "pg";
-import { createUser, grantRole } from "../src/lib/auth.js";
-import { recordApproval } from "../src/lib/auth.js";
+import { createUser, grantRole, recordApproval } from "../src/lib/auth.js";
+import {
+  fileDecisionRecord,
+  digestDecisionRecordContent,
+  type DecisionRecordDoc,
+  type DecisionRecordInput,
+} from "../src/lib/dr.js";
 import {
   passG01CreateVenture,
   passPipelineGate,
   gateMeta,
-  digestDecisionRecordContent,
-  type DecisionRecordDoc,
   type GatePassResult,
 } from "../src/lib/gates.js";
 import {
@@ -21,9 +26,11 @@ import {
   type VentureState,
 } from "../src/lib/venture.js";
 
+export { digestDecisionRecordContent };
+
 export const runId = process.env.TEST_RUN_ID ?? String(Date.now());
 
-// Unique numeric base so DR ids / years never collide across runs on one DB.
+// Unique numeric base so DR placeholder ids / years never collide across runs.
 let drSeq = Number(String(Date.now()).slice(-8));
 let yearCounter = 2100 + (Number(runId.replace(/\D/g, "").slice(-3)) % 800);
 
@@ -56,7 +63,12 @@ function canonicalReversibility(gateId: string): string {
   }
 }
 
-/** Build a schema-valid, approved DR for a gate (overridable for failure tests). */
+/**
+ * Build a schema- and Part-VII-valid DR document for a gate (overridable for
+ * failure tests). Includes kill criteria, a rollback plan, and two options with
+ * a chosen option so it satisfies the R2+/R3+ intrinsic rules by default. The
+ * `id` is a placeholder — filing mints the real `DR-yyyy-seq`.
+ */
 export function makeDR(opts: {
   gateId: string;
   proposer: string;
@@ -65,6 +77,10 @@ export function makeDR(opts: {
   killCriteria?: string[] | null;
   id?: string;
   reversibility?: string;
+  options?: DecisionRecordDoc["options"] | null;
+  rollbackPlan?: string | null;
+  risks?: string[];
+  dissent?: DecisionRecordDoc["dissent_record"];
 }): DecisionRecordDoc {
   drSeq += 1;
   const dr: DecisionRecordDoc = {
@@ -80,63 +96,113 @@ export function makeDR(opts: {
   if (opts.killCriteria !== null) {
     dr.kill_criteria = opts.killCriteria ?? ["conversion below 2% after 1000 sessions"];
   }
+  if (opts.rollbackPlan !== null) {
+    dr.rollback_plan = opts.rollbackPlan ?? "Archive; no external commitments were made.";
+  }
+  if (opts.options !== null) {
+    dr.options = opts.options ?? [
+      { option_id: "opt-proceed", summary: "Proceed to the next stage now." },
+      { option_id: "opt-defer", summary: "Defer one sprint to gather more evidence." },
+    ];
+    dr.chosen_option = "opt-proceed";
+  }
+  if (opts.risks) dr.risks = opts.risks;
+  if (opts.dissent) dr.dissent_record = opts.dissent;
   return dr;
 }
 
+export interface FiledDR {
+  drId: string;
+  digest: string;
+  document: DecisionRecordDoc;
+}
+
+/** File a DR (built via makeDR) into the immutable store; returns id + digest. */
+export async function fileDR(
+  client: pg.Client,
+  actors: Actors,
+  opts: {
+    gateId: string;
+    status?: string;
+    killCriteria?: string[] | null;
+    reversibility?: string;
+    options?: DecisionRecordDoc["options"] | null;
+    rollbackPlan?: string | null;
+    approver?: string | null;
+    year?: number;
+  },
+): Promise<FiledDR> {
+  const doc = makeDR({
+    gateId: opts.gateId,
+    proposer: actors.proposer,
+    approver: opts.approver === undefined ? actors.approver : opts.approver,
+    status: opts.status,
+    killCriteria: opts.killCriteria,
+    reversibility: opts.reversibility,
+    options: opts.options,
+    rollbackPlan: opts.rollbackPlan,
+  });
+  const r = await fileDecisionRecord(client, {
+    document: doc as DecisionRecordInput,
+    filedBy: actors.proposer,
+    year: opts.year,
+  });
+  return { drId: r.id, digest: r.digest, document: r.document };
+}
+
 /**
- * Record the approval evidence for a DR (issue-#7 approvals path), bound to
- * the DR's exact content: computes the canonical SHA-256 digest and records it
- * in the approval.recorded event, then the SAME document must be handed to the
- * gate system.
+ * Record the human approval evidence for a FILED DR, bound to its stored digest
+ * (issue-#7 approvals path reused). The gate later checks that the approval
+ * event's object_digest equals the DR's stored digest.
  */
 export async function approveDR(
   client: pg.Client,
   actors: Actors,
-  dr: DecisionRecordDoc,
+  filed: { drId: string; digest: string },
   opts?: { digest?: string },
 ): Promise<string> {
   const r = await recordApproval(client, {
     objectType: "decision-record",
-    objectId: dr.id,
+    objectId: filed.drId,
     proposerActorId: actors.proposer,
     approverActorId: actors.approver,
-    objectDigest: opts?.digest ?? digestDecisionRecordContent(dr),
+    objectDigest: opts?.digest ?? filed.digest,
   });
   return r.eventId;
 }
 
-/** Full-protocol G-01 pass: mints a venture in trend_analysis. */
+/** Full-protocol G-01 pass: files + approves a DR, then mints a venture. */
 export async function mintVenture(
   client: pg.Client,
   actors: Actors,
   opts?: { name?: string; year?: number; opportunityRef?: string },
 ): Promise<GatePassResult & { drId: string }> {
-  const dr = makeDR({ gateId: "G-01", proposer: actors.proposer, approver: actors.approver });
-  const approvalEventId = await approveDR(client, actors, dr);
+  const filed = await fileDR(client, actors, { gateId: "G-01" });
+  const approvalEventId = await approveDR(client, actors, filed);
   const r = await passG01CreateVenture(client, {
-    name: opts?.name ?? `venture-${dr.id}`,
-    opportunityRef: opts?.opportunityRef ?? `KI-opp-${dr.id}`,
-    decisionRecord: dr,
+    name: opts?.name ?? `venture-${filed.drId}`,
+    opportunityRef: opts?.opportunityRef ?? `KI-opp-${filed.drId}`,
+    decisionRecordId: filed.drId,
     approvalEventId,
     actor: actors.approver,
     year: opts?.year ?? freshYear(),
   });
-  return { ...r, drId: dr.id };
+  return { ...r, drId: filed.drId };
 }
 
-/** Full-protocol pass of one pipeline gate G-02..G-06 with a fresh DR. */
+/** Full-protocol pass of one pipeline gate G-02..G-06 with a fresh filed DR. */
 export async function passGateFor(
   client: pg.Client,
   actors: Actors,
   ventureId: string,
   gateId: string,
 ): Promise<GatePassResult> {
-  const dr = makeDR({ gateId, proposer: actors.proposer, approver: actors.approver });
-  const approvalEventId = await approveDR(client, actors, dr);
+  const filed = await fileDR(client, actors, { gateId });
+  const approvalEventId = await approveDR(client, actors, filed);
   return passPipelineGate(client, {
     gateId,
     ventureId,
-    decisionRecord: dr,
+    decisionRecordId: filed.drId,
     approvalEventId,
     actor: actors.approver,
   });

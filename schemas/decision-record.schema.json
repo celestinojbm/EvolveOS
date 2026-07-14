@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://evolveos.spec/schemas/decision-record.schema.json",
   "title": "EvolveOS Decision Record",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "title", "proposer", "reversibility_class", "decision", "status"],
   "properties": {
+    "schema_version": {"type": "string", "minLength": 1},
     "id": {"type": "string", "pattern": "^DR-\\d{4}-\\d+$"},
     "title": {"type": "string", "minLength": 1},
     "proposer": {"type": "string"},
@@ -21,6 +22,38 @@
     "risks": {"type": "array", "items": {"type": "string"}},
     "kill_criteria": {"type": "array", "items": {"type": "string"}},
     "rollback_plan": {"type": ["string", "null"]},
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["option_id", "summary"],
+        "properties": {
+          "option_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+          "summary": {"type": "string", "minLength": 1},
+          "predicted_outcome_distribution": {"type": ["object", "null"]},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}},
+          "risk_note": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "chosen_option": {"type": ["string", "null"]},
+    "dissent_record": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["argument"],
+        "properties": {
+          "author": {"type": ["string", "null"]},
+          "position": {"type": ["string", "null"]},
+          "argument": {"type": "string", "minLength": 1},
+          "reference": {"type": ["string", "null"]},
+          "shown_to_humans": {"type": "boolean"}
+        }
+      }
+    },
+    "amends_dr_id": {"type": ["string", "null"], "pattern": "^DR-\\d{4}-\\d+$"},
     "status": {"type": "string", "enum": ["proposed", "approved", "rejected", "executed", "rolled_back", "superseded"]},
     "created_at": {"type": ["string", "null"]},
     "decided_at": {"type": ["string", "null"]},

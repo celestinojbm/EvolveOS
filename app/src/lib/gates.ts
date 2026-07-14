@@ -51,11 +51,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import { createHash } from "node:crypto";
 import type { Client, PoolClient } from "pg";
-import { appendEventTx, acquireEventChainLock, canonicalize } from "./eventlog.js";
+import { appendEventTx, acquireEventChainLock } from "./eventlog.js";
 import { hasActiveRole } from "./auth.js";
+import { getDecisionRecord, type DecisionRecordDoc } from "./dr.js";
 import {
   TRANSITIONS,
   ENTRY_GATE,
@@ -150,76 +149,17 @@ function implementedMeta(gateId: string): GateMeta {
   return meta;
 }
 
-// --- Decision Record validation (in memory; persistence is issue #10) --------
+// --- Decision Record: loaded from the store, validated for THIS gate ---------
+//
+// The DR content primitives — canonicalization, schema + semantic validation,
+// and the SHA-256 digest — live in dr.ts (issue #10), the single
+// canonicalization owner. A gate NEVER takes a caller-supplied document: it
+// loads the FILED DR by id (dr.getDecisionRecord verifies canonical bytes vs
+// stored digest), then applies only the GATE-SPECIFIC semantics below. The gate
+// therefore binds to exactly the bytes dr.ts filed and the approval bound.
 
-export interface DecisionRecordDoc {
-  id: string;
-  title: string;
-  proposer: string;
-  approver?: string | null;
-  gate_id?: string | null;
-  reversibility_class: string;
-  decision: string;
-  status: string;
-  kill_criteria?: string[];
-  [key: string]: unknown;
-}
-
-// ajv ships CJS; under NodeNext ESM the 2020 class needs a require + .default.
-interface AjvError {
-  instancePath?: string;
-  message?: string;
-}
-type AjvValidate = ((data: unknown) => boolean) & { errors?: AjvError[] | null };
-interface AjvLike {
-  compile(schema: unknown): AjvValidate;
-}
-const require = createRequire(import.meta.url);
-const ajvModule = require("ajv/dist/2020.js") as
-  | (new (opts: object) => AjvLike)
-  | { default: new (opts: object) => AjvLike };
-const Ajv2020 = ("default" in ajvModule ? ajvModule.default : ajvModule) as new (
-  opts: object,
-) => AjvLike;
-const ajv = new Ajv2020({ allErrors: true, strict: false });
-const validateDrSchema = ajv.compile(
-  JSON.parse(readFileSync(join(REPO_ROOT, "schemas", "decision-record.schema.json"), "utf8")),
-);
-
-/** Content digest of a DR: SHA-256 over its canonical (key-sorted) JSON. */
-export function digestDecisionRecordContent(dr: DecisionRecordDoc): string {
-  return createHash("sha256").update(canonicalize(dr), "utf8").digest("hex");
-}
-
-export interface DrSnapshot {
-  /** Validated deep clone — the ONLY document the pass may use from here on. */
-  document: DecisionRecordDoc;
-  canonicalJson: string;
-  digest: string;
-}
-
-/**
- * Take a canonical, IMMUTABLE snapshot of the submitted Decision Record and
- * validate it — fully synchronous, so callers run it before their first await
- * and later mutations of the caller's object cannot affect the pass:
- *   1. canonical deterministic JSON (key-sorted, via eventlog.canonicalize);
- *   2. deep clone from that JSON — the caller's object is never read again;
- *   3. schema validation of the CLONE against decision-record.schema.json;
- *   4. semantic validation (gate id, approved, proposer/approver, separation,
- *      canonical reversibility class, kill criteria where mandatory);
- *   5. SHA-256 digest of the canonical JSON — the content the approval
- *      evidence must have bound (approval.recorded payload.object_digest).
- */
-export function snapshotDecisionRecord(meta: GateMeta, input: DecisionRecordDoc): DrSnapshot {
-  const canonicalJson = canonicalize(input);
-  const dr = JSON.parse(canonicalJson) as DecisionRecordDoc; // deep clone
-  if (!validateDrSchema(dr)) {
-    const details = (validateDrSchema.errors ?? [])
-      .slice(0, 5)
-      .map((e: AjvError) => `${e.instancePath || "$"} ${e.message}`)
-      .join("; ");
-    throw new Error(`decision record fails decision-record.schema.json: ${details}`);
-  }
+/** Gate-specific semantic checks on a loaded DR document (throws on failure). */
+function assertGateSemantics(meta: GateMeta, dr: DecisionRecordDoc): void {
   if (dr.gate_id !== meta.id) {
     throw new Error(
       `decision record gate mismatch: DR ${dr.id} cites gate '${dr.gate_id ?? "none"}', expected '${meta.id}'`,
@@ -252,18 +192,34 @@ export function snapshotDecisionRecord(meta: GateMeta, input: DecisionRecordDoc)
       );
     }
   }
-  return {
-    document: dr,
-    canonicalJson,
-    digest: createHash("sha256").update(canonicalJson, "utf8").digest("hex"),
-  };
+}
+
+/**
+ * Load the FILED DR for a pass (inside the serialized gate transaction), verify
+ * its integrity (dr.getDecisionRecord recomputes the digest from the stored
+ * canonical bytes), and apply the gate-specific semantics. Returns the exact
+ * filed document and its stored digest — the content the approval must bind to.
+ */
+async function loadGateDrTx(
+  client: Queryable,
+  meta: GateMeta,
+  decisionRecordId: string,
+): Promise<{ document: DecisionRecordDoc; digest: string }> {
+  const record = await getDecisionRecord(client, decisionRecordId);
+  if (!record) {
+    throw new Error(
+      `decision record not filed: ${decisionRecordId} — file it with dr.fileDecisionRecord before passing a gate`,
+    );
+  }
+  assertGateSemantics(meta, record.document);
+  return { document: record.document, digest: record.digest };
 }
 
 // --- Approval evidence validation (issue #7 approvals; inside the txn) --------
 
 async function validateApprovalTx(
   client: Queryable,
-  snap: DrSnapshot,
+  snap: { document: DecisionRecordDoc; digest: string },
   approvalEventId: string,
 ): Promise<{ proposer: string; approver: string }> {
   const dr = snap.document;
@@ -425,7 +381,7 @@ async function insertGatePassTx(
   } catch (err) {
     if (err instanceof Error && /gate_passes_dr_id|dr_id/.test(err.message)) {
       throw new Error(
-        `no gate shopping (Appendix C mechanic 5): DR ${row.drId} has already been executed — a new pass needs a new decision record (resubmission-diff validation arrives with issue #10)`,
+        `no gate shopping (Appendix C mechanic 5): DR ${row.drId} has already been executed — a new pass needs a new decision record (resubmission-diff validation remains deferred beyond issue #10)`,
       );
     }
     throw err;
@@ -454,7 +410,7 @@ export async function passG01CreateVenture(
   input: {
     name: string;
     opportunityRef: string;
-    decisionRecord: DecisionRecordDoc;
+    decisionRecordId: string;
     approvalEventId: string;
     actor: string;
     year?: number;
@@ -462,33 +418,26 @@ export async function passG01CreateVenture(
   },
 ): Promise<GatePassResult> {
   const meta = implementedMeta(ENTRY_GATE);
-  // FULL request snapshot BEFORE the first await. Each input field is read
-  // exactly once here (into locals, then a frozen object); after this the
-  // mutable `input` is never touched again, so a later mutation of the
-  // caller's object — of ANY field, not just the DR — cannot change the pass.
-  const rawName = input.name;
-  const rawOpportunityRef = input.opportunityRef;
-  const rawApprovalEventId = input.approvalEventId;
-  const rawActor = input.actor;
-  const rawYear = input.year;
-  const rawSpend = input.requestedSpend;
-  const rawDr = input.decisionRecord;
+  // FULL request snapshot BEFORE the first await. Each field is read exactly
+  // once here (into a frozen object); after this the mutable `input` is never
+  // touched again. The DR is a FILED reference (decisionRecordId) — the exact
+  // document is loaded from the immutable store inside the transaction.
   const req = Object.freeze({
-    name: requireField(rawName, "name"),
+    name: requireField(input.name, "name"),
     opportunityRef: requireField(
-      rawOpportunityRef,
+      input.opportunityRef,
       "opportunityRef (the pre-G-01 opportunity brief / KI)",
     ),
-    approvalEventId: requireField(rawApprovalEventId, "approvalEventId"),
-    actor: requireField(rawActor, "actor"),
-    year: rawYear,
-    requestedSpend: rawSpend ?? null,
-    snapshot: snapshotDecisionRecord(meta, rawDr),
+    decisionRecordId: requireField(input.decisionRecordId, "decisionRecordId"),
+    approvalEventId: requireField(input.approvalEventId, "approvalEventId"),
+    actor: requireField(input.actor, "actor"),
+    year: input.year,
+    requestedSpend: input.requestedSpend ?? null,
   });
   rejectSpend(req.requestedSpend);
-  const snap = req.snapshot;
-  const dr = snap.document;
   return runGateTx(client, async () => {
+    const snap = await loadGateDrTx(client, meta, req.decisionRecordId);
+    const dr = snap.document;
     const actors = await validateApprovalTx(client, snap, req.approvalEventId);
     const minted = await mintVentureAtG01Tx(client, {
       name: req.name,
@@ -556,7 +505,7 @@ export async function passPipelineGate(
   input: {
     gateId: string;
     ventureId: string;
-    decisionRecord: DecisionRecordDoc;
+    decisionRecordId: string;
     approvalEventId: string;
     actor: string;
     requestedSpend?: number | null;
@@ -573,24 +522,20 @@ export async function passPipelineGate(
     );
   }
   // FULL request snapshot BEFORE the first await (see passG01CreateVenture):
-  // every field is read once here, then `input` is never touched again.
-  const rawVentureId = input.ventureId;
-  const rawApprovalEventId = input.approvalEventId;
-  const rawActor = input.actor;
-  const rawSpend = input.requestedSpend;
-  const rawDr = input.decisionRecord;
+  // every field is read once here, then `input` is never touched again. The DR
+  // is loaded from the immutable store inside the transaction, by id.
   const req = Object.freeze({
     gateId,
-    ventureId: requireField(rawVentureId, "ventureId"),
-    approvalEventId: requireField(rawApprovalEventId, "approvalEventId"),
-    actor: requireField(rawActor, "actor"),
-    requestedSpend: rawSpend ?? null,
-    snapshot: snapshotDecisionRecord(meta, rawDr),
+    ventureId: requireField(input.ventureId, "ventureId"),
+    decisionRecordId: requireField(input.decisionRecordId, "decisionRecordId"),
+    approvalEventId: requireField(input.approvalEventId, "approvalEventId"),
+    actor: requireField(input.actor, "actor"),
+    requestedSpend: input.requestedSpend ?? null,
   });
   rejectSpend(req.requestedSpend);
-  const snap = req.snapshot;
-  const dr = snap.document;
   return runGateTx(client, async () => {
+    const snap = await loadGateDrTx(client, meta, req.decisionRecordId);
+    const dr = snap.document;
     const actors = await validateApprovalTx(client, snap, req.approvalEventId);
     const effect = await advanceVentureForGateTx(client, {
       ventureId: req.ventureId,
@@ -657,7 +602,7 @@ export async function passStandingGate(
     subjectType: string;
     subjectId: string;
     ventureId?: string | null;
-    decisionRecord: DecisionRecordDoc;
+    decisionRecordId: string;
     approvalEventId: string;
     actor: string;
     requestedSpend?: number | null;
@@ -671,14 +616,10 @@ export async function passStandingGate(
     );
   }
   // FULL request snapshot BEFORE the first await (see passG01CreateVenture):
-  // read each field once, validate, then never touch `input` again.
+  // read each field once, validate, then never touch `input` again. The DR is
+  // loaded from the immutable store inside the transaction, by id.
   const rawSubjectType = input.subjectType;
   const rawSubjectId = input.subjectId;
-  const rawVentureId = input.ventureId;
-  const rawApprovalEventId = input.approvalEventId;
-  const rawActor = input.actor;
-  const rawSpend = input.requestedSpend;
-  const rawDr = input.decisionRecord;
   if (
     typeof rawSubjectType !== "string" ||
     !rawSubjectType.trim() ||
@@ -693,16 +634,16 @@ export async function passStandingGate(
     gateId,
     subjectType: rawSubjectType,
     subjectId: rawSubjectId,
-    ventureId: rawVentureId == null ? null : requireField(rawVentureId, "ventureId"),
-    approvalEventId: requireField(rawApprovalEventId, "approvalEventId"),
-    actor: requireField(rawActor, "actor"),
-    requestedSpend: rawSpend ?? null,
-    snapshot: snapshotDecisionRecord(meta, rawDr),
+    ventureId: input.ventureId == null ? null : requireField(input.ventureId, "ventureId"),
+    decisionRecordId: requireField(input.decisionRecordId, "decisionRecordId"),
+    approvalEventId: requireField(input.approvalEventId, "approvalEventId"),
+    actor: requireField(input.actor, "actor"),
+    requestedSpend: input.requestedSpend ?? null,
   });
   rejectSpend(req.requestedSpend);
-  const snap = req.snapshot;
-  const dr = snap.document;
   return runGateTx(client, async () => {
+    const snap = await loadGateDrTx(client, meta, req.decisionRecordId);
+    const dr = snap.document;
     const actors = await validateApprovalTx(client, snap, req.approvalEventId);
     if (req.ventureId) {
       const v = await client.query("SELECT 1 FROM ventures WHERE id = $1", [req.ventureId]);
@@ -767,7 +708,7 @@ export async function passGate(
   client: Queryable,
   input: {
     gateId: string;
-    decisionRecord: DecisionRecordDoc;
+    decisionRecordId: string;
     approvalEventId: string;
     actor: string;
     requestedSpend?: number | null;
@@ -790,7 +731,7 @@ export async function passGate(
   // the caller's fields once — a later mutation cannot affect the pass.
   const req = Object.freeze({
     gateId,
-    decisionRecord: input.decisionRecord,
+    decisionRecordId: input.decisionRecordId,
     approvalEventId: input.approvalEventId,
     actor: input.actor,
     requestedSpend: input.requestedSpend,
@@ -805,7 +746,7 @@ export async function passGate(
     return passG01CreateVenture(client, {
       name: req.name ?? "",
       opportunityRef: req.opportunityRef ?? "",
-      decisionRecord: req.decisionRecord,
+      decisionRecordId: req.decisionRecordId,
       approvalEventId: req.approvalEventId,
       actor: req.actor,
       year: req.year,
@@ -817,7 +758,7 @@ export async function passGate(
     return passPipelineGate(client, {
       gateId,
       ventureId: req.ventureId,
-      decisionRecord: req.decisionRecord,
+      decisionRecordId: req.decisionRecordId,
       approvalEventId: req.approvalEventId,
       actor: req.actor,
       requestedSpend: req.requestedSpend,
@@ -828,7 +769,7 @@ export async function passGate(
     subjectType: req.subjectType ?? "",
     subjectId: req.subjectId ?? "",
     ventureId: req.ventureId ?? null,
-    decisionRecord: req.decisionRecord,
+    decisionRecordId: req.decisionRecordId,
     approvalEventId: req.approvalEventId,
     actor: req.actor,
     requestedSpend: req.requestedSpend,

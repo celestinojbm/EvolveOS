@@ -8,7 +8,6 @@ import {
   passPipelineGate,
   passStandingGate,
   gateMeta,
-  digestDecisionRecordContent,
   PIPELINE_GATES,
   STANDING_GATES,
 } from "../src/lib/gates.js";
@@ -18,12 +17,13 @@ import {
   runId,
   freshYear,
   setupActors,
-  makeDR,
+  fileDR,
   approveDR,
   mintVenture,
   passGateFor,
   ventureTo,
   countEventsFor,
+  digestDecisionRecordContent,
   type Actors,
 } from "./helpers.js";
 
@@ -82,272 +82,318 @@ describe("gate system v0 — requirement failures (specific error, zero effects)
     if (drId) expect(await gatePassRows(client, drId)).toBe(0);
   }
 
-  it("1. unknown gate", async () => {
-    const dr = makeDR({ gateId: "G-99", proposer: actors.proposer, approver: actors.approver });
+  it("1. unknown gate (rejected before any DR is loaded)", async () => {
     await expectRejected(
-      () => passGate(client, { gateId: "G-99", decisionRecord: dr, approvalEventId: "EV-x", actor: "op" }),
+      () =>
+        passGate(client, {
+          gateId: "G-99",
+          decisionRecordId: "DR-2099-1",
+          approvalEventId: "EV-x",
+          actor: "op",
+        }),
       /unknown gate/i,
-      dr.id,
     );
   });
 
   it("2. known but not-implemented gate", async () => {
-    const dr = makeDR({ gateId: "G-08", proposer: actors.proposer, approver: actors.approver });
     await expectRejected(
-      () => passGate(client, { gateId: "G-08", decisionRecord: dr, approvalEventId: "EV-x", actor: "op" }),
+      () =>
+        passGate(client, {
+          gateId: "G-08",
+          decisionRecordId: "DR-2099-1",
+          approvalEventId: "EV-x",
+          actor: "op",
+        }),
       /not implemented in gate system v0/i,
-      dr.id,
     );
   });
 
   it("3. G-00 through the pass path is rejected toward the issue-#12 stop mechanism", async () => {
-    const dr = makeDR({ gateId: "G-00", proposer: actors.proposer, approver: actors.approver });
-    await expectRejected(
-      () => passGate(client, { gateId: "G-00", decisionRecord: dr, approvalEventId: "EV-x", actor: "op" }),
-      /stop invocation.*issue #12/i,
-      dr.id,
-    );
-  });
-
-  it("4. DR failing the JSON schema", async () => {
-    const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    (dr as Record<string, unknown>).reversibility_class = "R9"; // not in enum
     await expectRejected(
       () =>
-        passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+        passGate(client, {
+          gateId: "G-00",
+          decisionRecordId: "DR-2099-1",
+          approvalEventId: "EV-x",
+          actor: "op",
         }),
-      /fails decision-record\.schema\.json/i,
-      dr.id,
+      /stop invocation.*issue #12/i,
     );
   });
 
-  it("5. DR citing a different gate", async () => {
+  it("4. a decisionRecordId that was never filed is rejected", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-03", proposer: actors.proposer, approver: actors.approver });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: `DR-2099-${Math.floor(Math.random() * 1e6)}`,
+          approvalEventId: "EV-x",
+          actor: "op",
+        }),
+      /decision record not filed/i,
+    );
+  });
+
+  it("5. filed DR citing a different gate", async () => {
+    const vid = await ventureTo(client, actors, "research");
+    const filed = await fileDR(client, actors, { gateId: "G-03" });
+    await expectRejected(
+      () =>
+        passPipelineGate(client, {
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: "EV-x",
+          actor: "op",
         }),
       /gate mismatch/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("6. DR not approved", async () => {
+  it("6. filed DR not approved (status)", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({
-      gateId: "G-02", proposer: actors.proposer, approver: actors.approver, status: "proposed",
-    });
+    const filed = await fileDR(client, actors, { gateId: "G-02", status: "proposed" });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: "EV-x",
+          actor: "op",
         }),
       /not approved/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("7. empty proposer", async () => {
-    const dr = makeDR({ gateId: "G-02", proposer: "  ", approver: actors.approver });
+  it("7. filed DR with no approver", async () => {
+    const vid = await ventureTo(client, actors, "research");
+    const filed = await fileDR(client, actors, { gateId: "G-02", approver: null });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: "V-2099-1", decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
-        }),
-      /empty proposer/i,
-      dr.id,
-    );
-  });
-
-  it("8. missing approver", async () => {
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: null });
-    await expectRejected(
-      () =>
-        passPipelineGate(client, {
-          gateId: "G-02", ventureId: "V-2099-1", decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: "EV-x",
+          actor: "op",
         }),
       /no approver/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("9. proposer == approver", async () => {
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.proposer });
+  it("8. filed DR whose proposer equals its approver", async () => {
+    const vid = await ventureTo(client, actors, "research");
+    const filed = await fileDR(client, actors, { gateId: "G-02", approver: actors.proposer });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: "V-2099-1", decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: "EV-x",
+          actor: "op",
         }),
       /role separation/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("10. missing kill criteria on a pipeline gate", async () => {
-    const dr = makeDR({
-      gateId: "G-02", proposer: actors.proposer, approver: actors.approver, killCriteria: null,
-    });
+  it("9. gate-mandatory kill criteria absent (G-01, an R1 gate that still requires them)", async () => {
+    // G-01 is R1, so the DR-intrinsic R2+ kill rule does not apply — the DR is
+    // filable — but the gate registry marks kill criteria mandatory for G-01, so
+    // the GATE rejects it.
+    const filed = await fileDR(client, actors, { gateId: "G-01", killCriteria: null });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expectRejected(
       () =>
-        passPipelineGate(client, {
-          gateId: "G-02", ventureId: "V-2099-1", decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+        passG01CreateVenture(client, {
+          name: "no-kill",
+          opportunityRef: "KI-no-kill",
+          decisionRecordId: filed.drId,
+          approvalEventId,
+          actor: actors.approver,
+          year: freshYear(),
         }),
       /kill criterion/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("11. kill criteria that are only blank strings", async () => {
-    const dr = makeDR({
-      gateId: "G-02", proposer: actors.proposer, approver: actors.approver, killCriteria: ["  ", ""],
-    });
-    await expectRejected(
-      () =>
-        passPipelineGate(client, {
-          gateId: "G-02", ventureId: "V-2099-1", decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
-        }),
-      /kill criterion/i,
-      dr.id,
-    );
-  });
-
-  it("12. approval event does not exist", async () => {
+  it("10. approval event does not exist", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr,
-          approvalEventId: `EV-missing-${runId}`, actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: `EV-missing-${runId}`,
+          actor: "op",
         }),
       /approval event not found/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("13. referenced event is not approval.recorded", async () => {
+  it("11. referenced event is not approval.recorded", async () => {
     const v = await mintVenture(client, actors); // its eventId is a gate_passed event
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: v.ventureId!, decisionRecord: dr,
-          approvalEventId: v.eventId, actor: "op",
+          gateId: "G-02",
+          ventureId: v.ventureId!,
+          decisionRecordId: filed.drId,
+          approvalEventId: v.eventId,
+          actor: "op",
         }),
       /not an approval\.recorded event/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("14. approval is for another DR", async () => {
+  it("12. approval is for another DR", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const other = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const other = await fileDR(client, actors, { gateId: "G-02" });
     const otherApproval = await approveDR(client, actors, other);
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr,
-          approvalEventId: otherApproval, actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: otherApproval,
+          actor: "op",
         }),
       /approves DR/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("15. approval actors do not match the DR", async () => {
+  it("13. approval actors do not match the DR", async () => {
     const pair2 = await setupActors(client, "gf2");
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const foreignApproval = await approveDR(client, pair2, dr); // same DR id, wrong actors
+    const filed = await fileDR(client, actors, { gateId: "G-02" }); // DR approver = actors.approver
+    const foreignApproval = await approveDR(client, pair2, filed); // recorded by pair2.approver
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr,
-          approvalEventId: foreignApproval, actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: foreignApproval,
+          actor: "op",
         }),
       /approval event actor mismatch/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("16. approver lost the approver role after approving", async () => {
+  it("14. approver lost the approver role after approving", async () => {
     const pair3 = await setupActors(client, "gf3");
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: pair3.proposer, approver: pair3.approver });
-    const approvalEventId = await approveDR(client, pair3, dr);
+    const filed = await fileDR(client, pair3, { gateId: "G-02" }); // proposer/approver = pair3
+    const approvalEventId = await approveDR(client, pair3, filed);
     await revokeRole(client, { userId: pair3.approver, role: "approver", revokedBy: "admin" });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId,
+          actor: "op",
         }),
       /no longer holds an active 'approver' role/i,
-      dr.id,
+      filed.drId,
     );
   });
 
-  it("17. an already-executed DR cannot be reused (no gate shopping)", async () => {
+  it("15. an already-executed DR cannot be reused (no gate shopping)", async () => {
     const vidA = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await passPipelineGate(client, {
-      gateId: "G-02", ventureId: vidA, decisionRecord: dr, approvalEventId, actor: "op",
+      gateId: "G-02",
+      ventureId: vidA,
+      decisionRecordId: filed.drId,
+      approvalEventId,
+      actor: "op",
     });
     const vidB = await ventureTo(client, actors, "research");
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vidB, decisionRecord: dr, approvalEventId, actor: "op",
+        gateId: "G-02",
+        ventureId: vidB,
+        decisionRecordId: filed.drId,
+        approvalEventId,
+        actor: "op",
       }),
     ).rejects.toThrow(/no gate shopping|already been executed/i);
-    expect(await gatePassRows(client, dr.id)).toBe(1); // still exactly one
+    expect(await gatePassRows(client, filed.drId)).toBe(1); // still exactly one
     expect((await getVenture(client, vidB))!.state).toBe("research"); // untouched
   });
 
-  it("18/19. wrong gate for the venture's actual state / stale state", async () => {
+  it("16/17. wrong gate for the venture's actual state / stale state", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-03", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-03" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-03", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+          gateId: "G-03",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId,
+          actor: "op",
         }),
       /wrong gate for venture state/i,
-      dr.id,
+      filed.drId,
     );
     expect((await getVenture(client, vid))!.state).toBe("research");
   });
 
-  it("20. G-04 without the five filed artifacts", async () => {
+  it("18. G-04 without the five filed artifacts", async () => {
     const vid = await ventureTo(client, actors, "analysis", { completeChecklist: false });
-    const dr = makeDR({ gateId: "G-04", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-04" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-04", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+          gateId: "G-04",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId,
+          actor: "op",
         }),
       /analysis block incomplete/i,
-      dr.id,
+      filed.drId,
     );
   });
 
   it("spend requests are rejected toward the manual queue (mechanic 3, ADR-006)", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     await expectRejected(
       () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr,
-          approvalEventId: "EV-x", actor: "op", requestedSpend: 500,
+          gateId: "G-02",
+          ventureId: vid,
+          decisionRecordId: filed.drId,
+          approvalEventId: "EV-x",
+          actor: "op",
+          requestedSpend: 500,
         }),
       /requires manual queue \(A1\)/i,
-      dr.id,
+      filed.drId,
     );
   });
 });
@@ -428,25 +474,25 @@ describe("gate system v0 — full path", () => {
     const vid = await ventureTo(client, actors, "validation");
     const before = (await getVenture(client, vid))!.state;
     for (const gateId of ["G-17", "G-18"]) {
-      const dr = makeDR({ gateId, proposer: actors.proposer, approver: actors.approver, killCriteria: null });
-      const approvalEventId = await approveDR(client, actors, dr);
+      const filed = await fileDR(client, actors, { gateId });
+      const approvalEventId = await approveDR(client, actors, filed);
       const r = await passStandingGate(client, {
         gateId, subjectType: gateId === "G-17" ? "communication" : "data-use",
-        subjectId: `subject-${dr.id}`, ventureId: vid,
-        decisionRecord: dr, approvalEventId, actor: "op",
+        subjectId: `subject-${filed.drId}`, ventureId: vid,
+        decisionRecordId: filed.drId, approvalEventId, actor: "op",
       });
       expect(r.fromState).toBeNull();
       expect(r.toState).toBeNull();
-      expect(await gatePassRows(client, dr.id)).toBe(1);
+      expect(await gatePassRows(client, filed.drId)).toBe(1);
     }
     expect((await getVenture(client, vid))!.state).toBe(before); // unchanged
   });
 
   it("standing gates demand a non-empty subject", async () => {
-    const dr = makeDR({ gateId: "G-17", proposer: actors.proposer, approver: actors.approver, killCriteria: null });
+    const filed = await fileDR(client, actors, { gateId: "G-17" });
     await expect(
       passStandingGate(client, {
-        gateId: "G-17", subjectType: " ", subjectId: "", decisionRecord: dr,
+        gateId: "G-17", subjectType: " ", subjectId: "", decisionRecordId: filed.drId,
         approvalEventId: "EV-x", actor: "op",
       }),
     ).rejects.toThrow(/non-empty subjectType and subjectId/i);
@@ -463,13 +509,13 @@ describe("gate system v0 — full path", () => {
   });
 
   it("passGate dispatcher: G-01 without name/opportunity is rejected; pipeline needs ventureId", async () => {
-    const dr = makeDR({ gateId: "G-01", proposer: actors.proposer, approver: actors.approver });
+    const g1 = await fileDR(client, actors, { gateId: "G-01" });
     await expect(
-      passGate(client, { gateId: "G-01", decisionRecord: dr, approvalEventId: "EV-x", actor: "op" }),
+      passGate(client, { gateId: "G-01", decisionRecordId: g1.drId, approvalEventId: "EV-x", actor: "op" }),
     ).rejects.toThrow(/name|opportunityRef/i);
-    const dr2 = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const g2 = await fileDR(client, actors, { gateId: "G-02" });
     await expect(
-      passGate(client, { gateId: "G-02", decisionRecord: dr2, approvalEventId: "EV-x", actor: "op" }),
+      passGate(client, { gateId: "G-02", decisionRecordId: g2.drId, approvalEventId: "EV-x", actor: "op" }),
     ).rejects.toThrow(/requires a ventureId/i);
   });
 });
@@ -489,28 +535,28 @@ describe("gate system v0 — atomicity", () => {
 
   it("event-append failure: no transition, no projection", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expect(
       withBlocked(client, "events", "INSERT", () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+          gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
         }),
       ),
     ).rejects.toThrow(/gtest-injected/i);
     expect((await getVenture(client, vid))!.state).toBe("research");
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("projection-insert failure: event and transition roll back", async () => {
     const vid = await ventureTo(client, actors, "research");
     const before = await countEventsFor(client, "gate_passed", vid);
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expect(
       withBlocked(client, "gate_passes", "INSERT", () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+          gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
         }),
       ),
     ).rejects.toThrow(/gtest-injected/i);
@@ -521,34 +567,35 @@ describe("gate system v0 — atomicity", () => {
   it("venture-update failure: no gate_passed", async () => {
     const vid = await ventureTo(client, actors, "research");
     const before = await countEventsFor(client, "gate_passed", vid);
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expect(
       withBlocked(client, "ventures", "UPDATE", () =>
         passPipelineGate(client, {
-          gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+          gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
         }),
       ),
     ).rejects.toThrow(/gtest-injected/i);
     expect(await countEventsFor(client, "gate_passed", vid)).toBe(before);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("G-01 creation failure: no venture, no event, no projection", async () => {
     const year = freshYear();
-    const dr = makeDR({ gateId: "G-01", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-01" });
+    const approvalEventId = await approveDR(client, actors, filed);
     await expect(
       withBlocked(client, "ventures", "INSERT", () =>
         passG01CreateVenture(client, {
-          name: "ghost", opportunityRef: "KI-x", decisionRecord: dr,
+          name: "ghost", opportunityRef: "KI-x", decisionRecordId: filed.drId,
           approvalEventId, actor: "op", year,
         }),
       ),
     ).rejects.toThrow(/gtest-injected/i);
-    const { rows } = await client.query("SELECT 1 FROM ventures WHERE id = $1", [`V-${year}-1`]);
+    // Robust across reused DBs: no venture references this freshly-filed DR.
+    const { rows } = await client.query("SELECT 1 FROM ventures WHERE entry_dr_ref = $1", [filed.drId]);
     expect(rows.length).toBe(0);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 });
 
@@ -584,152 +631,128 @@ describe("gate system v0 — content binding + reversibility", () => {
     return id;
   }
 
-  it("mutating the caller's DR object after the call does not affect the pass (snapshot)", async () => {
+  it("the gate binds to the FILED bytes: a stale in-memory copy cannot change the pass", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const originalDigest = digestDecisionRecordContent(dr);
-    const originalKill = [...(dr.kill_criteria ?? [])];
-    const approvalEventId = await approveDR(client, actors, dr);
-    const pending = passPipelineGate(client, {
-      gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
+    // Mutate the caller's in-memory document — the gate loads the immutable
+    // stored copy by id, so the mutation is irrelevant.
+    filed.document.decision = "changed in memory";
+    filed.document.gate_id = "G-99";
+    const r = await passPipelineGate(client, {
+      gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
     });
-    // Mutate the original object immediately — the snapshot must be immune.
-    dr.status = "rejected";
-    dr.decision = "changed";
-    dr.kill_criteria = [];
-    dr.gate_id = "G-99";
-    const r = await pending;
     expect(r.toState).toBe("validation");
     const ev = await client.query<{ payload: Record<string, unknown> }>(
       "SELECT payload FROM events WHERE id = $1", [r.eventId]);
     const p = ev.rows[0].payload;
     expect(p.gate_id).toBe("G-02");
-    expect(p.kill_criteria).toEqual(originalKill);
-    expect(p.dr_digest).toBe(originalDigest);
+    expect(p.dr_digest).toBe(filed.digest);
     expect(p.reversibility_class).toBe("R2");
-    expect((await getVenture(client, vid))!.state).toBe("validation");
   });
 
-  it("approve-then-mutate is rejected by digest mismatch with zero effects", async () => {
+  it("an approval bound to a different digest than the filed DR is rejected with zero effects", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr); // digest of ORIGINAL content
-    dr.decision = "materially different decision"; // same id/proposer/approver/gate
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    // Approve with a valid-format digest that is NOT the filed DR's digest.
+    const wrongDigest = digestDecisionRecordContent({ ...filed.document, decision: "different" });
+    const approvalEventId = await approveDR(client, actors, filed, { digest: wrongDigest });
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+        gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
       }),
     ).rejects.toThrow(/approval digest mismatch/i);
     expect((await getVenture(client, vid))!.state).toBe("research");
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
     expect(await countEventsFor(client, "gate_passed", vid)).toBe(1); // only the G-01 mint
-  });
-
-  it.each([
-    ["decision", (d: ReturnType<typeof makeDR>) => { d.decision = "changed after approval"; }, /approval digest mismatch/i],
-    ["kill_criteria", (d: ReturnType<typeof makeDR>) => { d.kill_criteria = ["a different criterion"]; }, /approval digest mismatch/i],
-    ["gate_id", (d: ReturnType<typeof makeDR>) => { d.gate_id = "G-03"; }, /gate mismatch/i],
-    ["reversibility_class", (d: ReturnType<typeof makeDR>) => { d.reversibility_class = "R3"; }, /reversibility mismatch/i],
-  ])("post-approval mutation of %s is rejected", async (_field, mutate, re) => {
-    const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
-    mutate(dr);
-    await expect(
-      passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
-      }),
-    ).rejects.toThrow(re);
-    expect((await getVenture(client, vid))!.state).toBe("research");
-    expect(await gatePassRows(client, dr.id)).toBe(0);
   });
 
   it("a forged approval event whose actor is not the approver is rejected", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     const forged = await forgeApprovalEvent(
-      { proposer_actor_id: actors.proposer, object_digest: digestDecisionRecordContent(dr) },
-      dr.id,
+      { proposer_actor_id: actors.proposer, object_digest: filed.digest },
+      filed.drId,
       "someone-else",
     );
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+        gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId: forged, actor: "op",
       }),
     ).rejects.toThrow(/approval event actor mismatch/i);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("an approval event without a digest is rejected", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     const forged = await forgeApprovalEvent(
-      { proposer_actor_id: actors.proposer }, dr.id, actors.approver);
+      { proposer_actor_id: actors.proposer }, filed.drId, actors.approver);
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+        gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId: forged, actor: "op",
       }),
     ).rejects.toThrow(/carries no document digest/i);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("an approval event with a different digest is rejected", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     const forged = await forgeApprovalEvent(
       { proposer_actor_id: actors.proposer, object_digest: "0".repeat(64) },
-      dr.id,
+      filed.drId,
       actors.approver,
     );
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+        gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId: forged, actor: "op",
       }),
     ).rejects.toThrow(/approval digest mismatch/i);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("an approval event whose digest is not a string is rejected cleanly (no TypeError)", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     const forged = await forgeApprovalEvent(
       { proposer_actor_id: actors.proposer, object_digest: 1234567890 }, // a number, not hex
-      dr.id,
+      filed.drId,
       actors.approver,
     );
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+        gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId: forged, actor: "op",
       }),
     ).rejects.toThrow(/carries no document digest/i);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("an approval event with a malformed (non-SHA-256) digest string is rejected", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
     const forged = await forgeApprovalEvent(
       { proposer_actor_id: actors.proposer, object_digest: "deadbeef" }, // valid hex, wrong length
-      dr.id,
+      filed.drId,
       actors.approver,
     );
     await expect(
       passPipelineGate(client, {
-        gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId: forged, actor: "op",
+        gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId: forged, actor: "op",
       }),
     ).rejects.toThrow(/malformed document digest/i);
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("a correct approval with the correct digest passes", async () => {
     const vid = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
     const r = await passPipelineGate(client, {
-      gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op",
+      gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
     });
     expect(r.toState).toBe("validation");
-    expect(await gatePassRows(client, dr.id)).toBe(1);
+    expect(await gatePassRows(client, filed.drId)).toBe(1);
   });
 
   it.each([
@@ -741,19 +764,17 @@ describe("gate system v0 — content binding + reversibility", () => {
   ) => {
     expect(gateMeta(gateId).reversibility_class).toBe(klass);
     const wrong = klass === "R2" ? "R3" : "R2";
-    const dr = makeDR({
-      gateId, proposer: actors.proposer, approver: actors.approver, reversibility: wrong,
-    });
+    const filed = await fileDR(client, actors, { gateId, reversibility: wrong });
     await expect(
       passGate(client, {
-        gateId, decisionRecord: dr, approvalEventId: "EV-x", actor: "op",
+        gateId, decisionRecordId: filed.drId, approvalEventId: "EV-x", actor: "op",
         name: "x", opportunityRef: "KI-x", ventureId: "V-2099-1",
         subjectType: "subject", subjectId: "subject-1",
       }),
     ).rejects.toThrow(
       new RegExp(`reversibility mismatch: gate ${gateId} requires ${klass}, DR declares ${wrong}`),
     );
-    expect(await gatePassRows(client, dr.id)).toBe(0);
+    expect(await gatePassRows(client, filed.drId)).toBe(0);
   });
 
   it("DB backstop: gate_passes rejects G-00, unknown, G-07..G-16, and malformed shapes", async () => {
@@ -804,12 +825,12 @@ describe("gate system v0 — concurrency", () => {
     const b = await freshClient();
     try {
       const vid = await ventureTo(client, actors, "research");
-      const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-      const approvalEventId = await approveDR(client, actors, dr);
-      const args = { gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op" };
+      const filed = await fileDR(client, actors, { gateId: "G-02" });
+      const approvalEventId = await approveDR(client, actors, filed);
+      const args = { gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op" };
       const results = await Promise.allSettled([passPipelineGate(a, args), passPipelineGate(b, args)]);
       expect(results.filter((r) => r.status === "fulfilled").length).toBe(1);
-      expect(await gatePassRows(client, dr.id)).toBe(1);
+      expect(await gatePassRows(client, filed.drId)).toBe(1);
       const gp = await countEventsFor(client, "gate_passed", vid);
       expect(gp).toBe(2); // G-01 mint + this single G-02 pass
       expect((await getVenture(client, vid))!.state).toBe("validation");
@@ -824,18 +845,18 @@ describe("gate system v0 — concurrency", () => {
     const b = await freshClient();
     try {
       const vid = await ventureTo(client, actors, "research");
-      const drA = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-      const drB = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
+      const drA = await fileDR(client, actors, { gateId: "G-02" });
+      const drB = await fileDR(client, actors, { gateId: "G-02" });
       const [apA, apB] = [await approveDR(client, actors, drA), await approveDR(client, actors, drB)];
       const results = await Promise.allSettled([
-        passPipelineGate(a, { gateId: "G-02", ventureId: vid, decisionRecord: drA, approvalEventId: apA, actor: "op" }),
-        passPipelineGate(b, { gateId: "G-02", ventureId: vid, decisionRecord: drB, approvalEventId: apB, actor: "op" }),
+        passPipelineGate(a, { gateId: "G-02", ventureId: vid, decisionRecordId: drA.drId, approvalEventId: apA, actor: "op" }),
+        passPipelineGate(b, { gateId: "G-02", ventureId: vid, decisionRecordId: drB.drId, approvalEventId: apB, actor: "op" }),
       ]);
       const ok = results.filter((r) => r.status === "fulfilled");
       const bad = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
       expect(ok.length).toBe(1);
       expect(String(bad[0].reason)).toMatch(/wrong gate for venture state/i);
-      expect((await gatePassRows(client, drA.id)) + (await gatePassRows(client, drB.id))).toBe(1);
+      expect((await gatePassRows(client, drA.drId)) + (await gatePassRows(client, drB.drId))).toBe(1);
       expect((await getVenture(client, vid))!.state).toBe("validation");
     } finally {
       await a.end();
@@ -850,10 +871,10 @@ describe("gate system v0 — concurrency", () => {
       for (let i = 0; i < 6; i++) {
         const pair = await setupActors(client, `gcr${i}`);
         const vid = await ventureTo(client, actors, "research");
-        const dr = makeDR({ gateId: "G-02", proposer: pair.proposer, approver: pair.approver });
-        const approvalEventId = await approveDR(client, pair, dr);
+        const filed = await fileDR(client, pair, { gateId: "G-02" });
+        const approvalEventId = await approveDR(client, pair, filed);
         const [pass, rev] = await Promise.allSettled([
-          passPipelineGate(a, { gateId: "G-02", ventureId: vid, decisionRecord: dr, approvalEventId, actor: "op" }),
+          passPipelineGate(a, { gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op" }),
           revokeRole(b, { userId: pair.approver, role: "approver", revokedBy: "admin" }),
         ]);
         expect(rev.status).toBe("fulfilled");
@@ -867,7 +888,7 @@ describe("gate system v0 — concurrency", () => {
           expect(Number(passSeq.rows[0].seq)).toBeLessThan(Number(revSeq.rows[0].seq));
         } else {
           expect(String(pass.reason)).toMatch(/no longer holds an active 'approver' role/i);
-          expect(await gatePassRows(client, dr.id)).toBe(0);
+          expect(await gatePassRows(client, filed.drId)).toBe(0);
         }
       }
     } finally {
@@ -881,10 +902,10 @@ describe("gate system v0 — concurrency", () => {
     const b = await freshClient();
     try {
       const year = freshYear();
-      const dr = makeDR({ gateId: "G-01", proposer: actors.proposer, approver: actors.approver });
-      const approvalEventId = await approveDR(client, actors, dr);
+      const filed = await fileDR(client, actors, { gateId: "G-01" });
+      const approvalEventId = await approveDR(client, actors, filed);
       const args = {
-        name: "cc-venture", opportunityRef: "KI-cc", decisionRecord: dr,
+        name: "cc-venture", opportunityRef: "KI-cc", decisionRecordId: filed.drId,
         approvalEventId, actor: "op", year,
       };
       const results = await Promise.allSettled([
@@ -895,9 +916,9 @@ describe("gate system v0 — concurrency", () => {
       expect(ok.length).toBe(1);
       expect(String(bad[0].reason)).toMatch(/no gate shopping|already been executed/i);
       const { rows } = await client.query<{ n: number }>(
-        "SELECT count(*)::int AS n FROM ventures WHERE entry_dr_ref = $1", [dr.id]);
+        "SELECT count(*)::int AS n FROM ventures WHERE entry_dr_ref = $1", [filed.drId]);
       expect(rows[0].n).toBe(1);
-      expect(await gatePassRows(client, dr.id)).toBe(1);
+      expect(await gatePassRows(client, filed.drId)).toBe(1);
     } finally {
       await a.end();
       await b.end();
@@ -927,22 +948,21 @@ describe("gate system v0 — request-snapshot immunity (whole request, not just 
     // Two ventures at the same stage: A is the real target, B a decoy.
     const vidA = await ventureTo(client, actors, "research");
     const vidB = await ventureTo(client, actors, "research");
-    const dr = makeDR({ gateId: "G-02", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-02" });
+    const approvalEventId = await approveDR(client, actors, filed);
     const input = {
       gateId: "G-02",
       ventureId: vidA,
-      decisionRecord: dr,
+      decisionRecordId: filed.drId,
       approvalEventId,
       actor: "op-original",
       requestedSpend: 0 as number | null,
     };
-    // Start the pass, THEN mutate every scalar field. The function captured
-    // them synchronously before its first await, so mutations are ineffective;
-    // had it re-read `input` after an await, B would advance / the bogus
-    // approval id would reject / the mutated actor would be recorded.
+    // Start the pass, THEN mutate every scalar field. The function captured them
+    // synchronously before its first await, so mutations are ineffective.
     const p = passPipelineGate(client, input);
     input.ventureId = vidB;
+    input.decisionRecordId = "DR-9999-1";
     input.approvalEventId = "EV-bogus-does-not-exist";
     input.actor = "mallory";
     input.gateId = "G-05";
@@ -967,20 +987,20 @@ describe("gate system v0 — request-snapshot immunity (whole request, not just 
       venture_id: string;
       approval_event_id: string;
       gate_id: string;
-    }>("SELECT venture_id, approval_event_id, gate_id FROM gate_passes WHERE dr_id = $1", [dr.id]);
+    }>("SELECT venture_id, approval_event_id, gate_id FROM gate_passes WHERE dr_id = $1", [filed.drId]);
     expect(gp.rows[0].venture_id).toBe(vidA);
     expect(gp.rows[0].approval_event_id).toBe(approvalEventId);
     expect(gp.rows[0].gate_id).toBe("G-02");
   });
 
   it("G-01: mutating name/opportunityRef/approvalEventId/actor/year cannot change the mint", async () => {
-    const dr = makeDR({ gateId: "G-01", proposer: actors.proposer, approver: actors.approver });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-01" });
+    const approvalEventId = await approveDR(client, actors, filed);
     const origYear = freshYear();
     const input = {
       name: "original-name",
       opportunityRef: "KI-original",
-      decisionRecord: dr,
+      decisionRecordId: filed.drId,
       approvalEventId,
       actor: "op-original",
       year: origYear,
@@ -1011,19 +1031,14 @@ describe("gate system v0 — request-snapshot immunity (whole request, not just 
   });
 
   it("standing: mutating subject/ventureId/approvalEventId/actor cannot change the authorization", async () => {
-    const dr = makeDR({
-      gateId: "G-17",
-      proposer: actors.proposer,
-      approver: actors.approver,
-      killCriteria: null,
-    });
-    const approvalEventId = await approveDR(client, actors, dr);
+    const filed = await fileDR(client, actors, { gateId: "G-17" });
+    const approvalEventId = await approveDR(client, actors, filed);
     const input = {
       gateId: "G-17",
       subjectType: "communication",
       subjectId: "subject-original",
       ventureId: null as string | null,
-      decisionRecord: dr,
+      decisionRecordId: filed.drId,
       approvalEventId,
       actor: "op-original",
       requestedSpend: 0 as number | null,
@@ -1056,7 +1071,7 @@ describe("gate system v0 — request-snapshot immunity (whole request, not just 
       approval_event_id: string;
     }>(
       "SELECT subject_type, subject_id, venture_id, approval_event_id FROM gate_passes WHERE dr_id = $1",
-      [dr.id],
+      [filed.drId],
     );
     expect(gp.rows[0].subject_type).toBe("communication");
     expect(gp.rows[0].subject_id).toBe("subject-original");
@@ -1081,11 +1096,9 @@ describe("gate system v0 — registry immutability at runtime", () => {
   it("a gate's metadata is frozen — reversibility_class cannot be re-classified", () => {
     const g5 = gateMeta("G-05");
     expect(g5.reversibility_class).toBe("R3");
-    // Frozen under ESM strict mode: the write throws and cannot reach the map.
     expect(() => {
       (g5 as { reversibility_class: string }).reversibility_class = "R1";
     }).toThrow();
-    // A second, independent lookup still sees the canonical class.
     expect(gateMeta("G-05").reversibility_class).toBe("R3");
   });
 
@@ -1105,19 +1118,14 @@ describe("gate system v0 — registry immutability at runtime", () => {
   });
 
   it("runtime tampering cannot implement G-08 nor de-classify G-01", async () => {
-    // Best-effort tamper attempts — all throw on the frozen structures; the
-    // backing Map is module-private and unreachable from here by design.
     try {
       (PIPELINE_GATES as string[]).push("G-08");
     } catch {
       /* frozen */
     }
-    // G-08 is still rejected as not implemented.
-    const dr8 = makeDR({ gateId: "G-08", proposer: actors.proposer, approver: actors.approver });
     await expect(
-      passGate(client, { gateId: "G-08", decisionRecord: dr8, approvalEventId: "EV-x", actor: "op" }),
+      passGate(client, { gateId: "G-08", decisionRecordId: "DR-2099-1", approvalEventId: "EV-x", actor: "op" }),
     ).rejects.toThrow(/not implemented in gate system v0/i);
-    // G-01 is still the pipeline entry gate: a full mint still works.
     const minted = await mintVenture(client, actors);
     expect(minted.ventureId!.startsWith("V-")).toBe(true);
     expect(PIPELINE_GATES).toContain("G-01");
