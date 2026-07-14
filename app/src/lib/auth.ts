@@ -40,6 +40,19 @@ function isRole(x: string): x is Role {
   return (ROLES as readonly string[]).includes(x);
 }
 
+/**
+ * Require a request field to be a non-empty, non-whitespace string and return
+ * it VERBATIM (identifiers are never silently rewritten — only emptiness is
+ * rejected). Used to snapshot a mutable request synchronously before the first
+ * await.
+ */
+function requireNonEmpty(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
 /** Internal sentinel: an intentional no-op that must roll the transaction back. */
 class NoOpRollback extends Error {}
 
@@ -188,6 +201,14 @@ export async function hasActiveRole(
  *      an approval can never be recorded after an effective revocation (TOCTOU
  *      closed). A missing role rolls back the provisional event;
  *   3. the DB CHECK on `approvals` backstops `proposer <> approver`.
+ *
+ * Content binding (issue #9): an approval of a `decision-record` MUST carry
+ * `objectDigest` — the SHA-256 of the DR's canonical JSON (see
+ * gates.digestDecisionRecordContent). The append-only `approval.recorded`
+ * event records it as `payload.object_digest`, immutably binding the approval
+ * to the DR's id, its FULL content, the proposer, and the approver (the event
+ * actor). The gate system rejects any pass whose submitted DR content does not
+ * hash to the approved digest.
  */
 export async function recordApproval(
   client: Queryable,
@@ -196,28 +217,65 @@ export async function recordApproval(
     objectId: string;
     proposerActorId: string;
     approverActorId: string;
+    /** SHA-256 of the approved document's canonical JSON. Mandatory for decision-records. */
+    objectDigest?: string | null;
   },
 ): Promise<{ eventId: string }> {
-  if (input.approverActorId === input.proposerActorId) {
+  // FULL request snapshot BEFORE the first await: read each field once, into a
+  // frozen object, then never touch the mutable `input` again — a later
+  // mutation of the caller's object cannot change the recorded approval.
+  const req = Object.freeze({
+    objectType: requireNonEmpty(input.objectType, "objectType"),
+    objectId: requireNonEmpty(input.objectId, "objectId"),
+    proposerActorId: requireNonEmpty(input.proposerActorId, "proposerActorId"),
+    approverActorId: requireNonEmpty(input.approverActorId, "approverActorId"),
+    objectDigest: input.objectDigest ?? null,
+  });
+  if (req.approverActorId === req.proposerActorId) {
     throw new Error("role separation: the approver must differ from the proposer");
+  }
+  // A decision-record approval MUST bind to the exact content: the digest is a
+  // canonical SHA-256 hex string (64 chars, [0-9a-f]). Reject any other shape
+  // — missing, wrong length, non-hex — with a specific error, so a malformed
+  // digest can never be recorded as if it bound the content.
+  let objectDigest: string | null = null;
+  if (req.objectType === "decision-record") {
+    const raw = req.objectDigest?.trim();
+    if (!raw) {
+      throw new Error(
+        "approvals for a decision-record require objectDigest (SHA-256 of the canonical DR content)",
+      );
+    }
+    if (!/^[0-9a-f]{64}$/.test(raw)) {
+      throw new Error(
+        "approvals for a decision-record require objectDigest to be a 64-char SHA-256 hex string ([0-9a-f])",
+      );
+    }
+    objectDigest = raw;
+  } else {
+    const raw = req.objectDigest?.trim();
+    objectDigest = raw ? raw : null;
   }
   return inTransaction(client, async () => {
     const eventId = await logAuthEventTx(client, {
-      actorId: input.approverActorId,
+      actorId: req.approverActorId,
       eventType: "approval.recorded",
-      objectType: input.objectType,
-      objectId: input.objectId,
-      payload: { proposer_actor_id: input.proposerActorId },
+      objectType: req.objectType,
+      objectId: req.objectId,
+      payload: {
+        proposer_actor_id: req.proposerActorId,
+        object_digest: objectDigest,
+      },
     });
     // Re-check the role INSIDE the serialized transaction (not before it).
-    if (!(await hasActiveRole(client, input.approverActorId, "approver"))) {
-      throw new Error(`not authorized: '${input.approverActorId}' lacks the 'approver' role`);
+    if (!(await hasActiveRole(client, req.approverActorId, "approver"))) {
+      throw new Error(`not authorized: '${req.approverActorId}' lacks the 'approver' role`);
     }
     await client.query(
       `INSERT INTO approvals
          (object_type, object_id, proposer_actor_id, approver_actor_id, event_id)
        VALUES ($1, $2, $3, $4, $5)`,
-      [input.objectType, input.objectId, input.proposerActorId, input.approverActorId, eventId],
+      [req.objectType, req.objectId, req.proposerActorId, req.approverActorId, eventId],
     );
     return { eventId };
   });

@@ -22,7 +22,9 @@ An approval whose approver equals the proposer is rejected:
 1. **Application layer** — `recordApproval` in `app/src/lib/auth.ts` throws *before* any event is logged, so a self-approval never reaches the log.
 2. **Data layer** — `approvals` carries `CHECK (proposer_actor_id <> approver_actor_id)`, so the database rejects the row regardless of the code path that attempts it. This is the "enforced at the data layer" guarantee from the issue.
 
-`recordApproval` additionally requires the approver to currently hold the `approver` role.
+`recordApproval` additionally requires the approver to currently hold the `approver` role. Since issue #9, approving a **decision-record** also requires `objectDigest` — the SHA-256 of the DR's canonical JSON — recorded as `payload.object_digest` in the append-only `approval.recorded` event, so the approval is immutably bound to the exact approved content (the gate system rejects any pass whose submitted DR does not hash to the approved digest; see [GATE_SYSTEM](GATE_SYSTEM.md)). The digest is **format-validated**: it must be a canonical **64-char SHA-256 hex string (`[0-9a-f]`)** — a missing, mis-length, non-hex, or uppercase digest is rejected up front with a specific error, so no malformed digest is ever recorded as if it bound the content.
+
+**Whole-request snapshot.** `recordApproval` reads **each request field exactly once, synchronously, before its first `await`** (into a frozen local snapshot), then never touches the caller's mutable `input` again — the actors, object, and digest are captured up front. Mutating the request object after the call cannot change the recorded approval: a test starts the call, then rewrites `objectId`, `proposerActorId`, `approverActorId`, and `objectDigest`, and asserts the persisted event and `approvals` row still carry the original values (the in-transaction `approver`-role re-check also uses the captured approver, so a swapped-in approver cannot slip through).
 
 ## The module (`app/src/lib/auth.ts`)
 

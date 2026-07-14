@@ -87,6 +87,7 @@ describe("user/role model (Postgres)", () => {
     await expect(
       recordApproval(client, {
         objectType: "decision-record",
+        objectDigest: "a".repeat(64),
         objectId: "DR-2027-777",
         proposerActorId: bob,
         approverActorId: bob,
@@ -97,6 +98,7 @@ describe("user/role model (Postgres)", () => {
   it("records an approval when proposer != approver and logs the event", async () => {
     const r = await recordApproval(client, {
       objectType: "decision-record",
+        objectDigest: "a".repeat(64),
       objectId: "DR-2027-778",
       proposerActorId: alice,
       approverActorId: bob,
@@ -108,11 +110,75 @@ describe("user/role model (Postgres)", () => {
     await expect(
       recordApproval(client, {
         objectType: "decision-record",
+        objectDigest: "a".repeat(64),
         objectId: "DR-2027-779",
         proposerActorId: alice,
         approverActorId: carol,
       }),
     ).rejects.toThrow(/lacks the 'approver' role/i);
+  });
+
+  it("recordApproval: mutating the request after the call cannot change the recorded approval", async () => {
+    const originalObjectId = uid("DR-snapshot");
+    const input = {
+      objectType: "decision-record",
+      objectId: originalObjectId,
+      proposerActorId: alice,
+      approverActorId: bob,
+      objectDigest: "a".repeat(64) as string | null,
+    };
+    // Start the call, THEN mutate every field. The request is captured
+    // synchronously before the first await; had it re-read `input` after the
+    // await, the mutated approver (eve) would fail the role re-check and the
+    // recorded actors/object/digest would differ.
+    const p = recordApproval(client, input);
+    input.objectId = "DR-2027-mutated";
+    input.proposerActorId = "mallory";
+    input.approverActorId = "eve";
+    input.objectDigest = "b".repeat(64);
+    const r = await p;
+
+    const ev = await client.query<{
+      actor_id: string;
+      object_id: string;
+      payload: Record<string, unknown>;
+    }>("SELECT actor_id, object_id, payload FROM events WHERE id = $1", [r.eventId]);
+    expect(ev.rows[0].actor_id).toBe(bob); // original approver, not eve
+    expect(ev.rows[0].object_id).toBe(originalObjectId);
+    expect(ev.rows[0].payload.proposer_actor_id).toBe(alice); // not mallory
+    expect(ev.rows[0].payload.object_digest).toBe("a".repeat(64)); // not b*64
+    const ap = await client.query<{
+      object_id: string;
+      proposer_actor_id: string;
+      approver_actor_id: string;
+    }>(
+      "SELECT object_id, proposer_actor_id, approver_actor_id FROM approvals WHERE event_id = $1",
+      [r.eventId],
+    );
+    expect(ap.rows[0].object_id).toBe(originalObjectId);
+    expect(ap.rows[0].proposer_actor_id).toBe(alice);
+    expect(ap.rows[0].approver_actor_id).toBe(bob);
+  });
+
+  it("recordApproval: a decision-record digest that is not a 64-char SHA-256 hex string is rejected", async () => {
+    for (const [tag, digest] of [
+      ["nonhex", "not-a-valid-sha256-digest-000000000000000000000000000000000000"],
+      ["short", "abc123"],
+      ["upper", "A".repeat(64)],
+    ] as const) {
+      const objectId = uid(`DR-badhex-${tag}`);
+      await expect(
+        recordApproval(client, {
+          objectType: "decision-record",
+          objectId,
+          proposerActorId: alice,
+          approverActorId: bob,
+          objectDigest: digest,
+        }),
+      ).rejects.toThrow(/SHA-256 hex/i);
+      // No orphan approval.recorded event for a rejected malformed digest.
+      expect(await countEvents(client, "approval.recorded", objectId)).toBe(0);
+    }
   });
 
   it("enforces proposer != approver at the DATA layer (DB CHECK, real event_id)", async () => {
@@ -190,6 +256,7 @@ describe("user/role model (Postgres)", () => {
       withInsertBlocked(client, "approvals", () =>
         recordApproval(client, {
           objectType: "decision-record",
+        objectDigest: "a".repeat(64),
           objectId: objId,
           proposerActorId: alice,
           approverActorId: bob,
@@ -299,6 +366,7 @@ describe("concurrency (Postgres)", () => {
           revokeRole(a, { userId: x, role: "approver", revokedBy: "admin" }),
           recordApproval(b, {
             objectType: "decision-record",
+        objectDigest: "a".repeat(64),
             objectId: objId,
             proposerActorId: p,
             approverActorId: x,
@@ -339,6 +407,7 @@ describe("concurrency (Postgres)", () => {
     await expect(
       recordApproval(client, {
         objectType: "decision-record",
+        objectDigest: "a".repeat(64),
         objectId: `DR-seq-${runId}`,
         proposerActorId: p,
         approverActorId: x,

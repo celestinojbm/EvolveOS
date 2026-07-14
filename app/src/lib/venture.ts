@@ -33,20 +33,20 @@
  * 'gate_pass' transitions, so a caller cannot present an arbitrary gate for
  * the handoff.
  *
- * State changes happen ONLY through `advanceStage` (gate pass), `handoffStage`
- * (the 2->3 handoff), or `killVenture` (kill-from-any-stage -> archived,
- * mandatory post-mortem reference). All run the issue-#7 discipline: one
- * transaction, event-chain advisory lock FIRST, then `SELECT ... FOR UPDATE`
- * on the venture row, validate, update, COMMIT — any failure rolls back the
- * provisional event, so no event persists for a rejected mutation and no row
- * changes without its event.
- *
- * Boundary with issue #9 (P0-8, gate system v0): the full gate-pass protocol —
- * DR validated against its schema, pre-registered kill criteria, an approval
- * event by a user holding the approver role, proposer≠approver — belongs to
- * #9. Here a gate pass must cite the EXACT gate for the transition plus a
- * non-empty authorization reference (`drRef`), recorded in the event payload
- * for #9 to validate. Documented in docs/VENTURE_STATE_MACHINE.md.
+ * SINCE ISSUE #9 (gate system v0): formal venture creation (the G-01 pass) and
+ * every gated advance (G-02..G-06) go through `gates.ts` — the ONLY public
+ * entry point for gate passes, which validates the full protocol (DR against
+ * its schema, pre-registered kill criteria, approval evidence by a user
+ * holding the approver role, proposer≠approver) and emits exactly ONE
+ * `gate_passed` event per pass. This module keeps the canonical state model
+ * and exposes INTERNAL transaction primitives (`mintVentureAtG01Tx`,
+ * `advanceVentureForGateTx`) that open no transaction and emit no events;
+ * ops/check-gate-bypass.mjs fails CI if any production file other than
+ * gates.ts touches them. Non-gated mutations remain public here:
+ * `handoffStage` (the 2->3 handoff), `completeAnalysisItem`, and
+ * `killVenture` — each atomic with its own event per the issue-#7 discipline
+ * (advisory lock first, then `SELECT ... FOR UPDATE`, validate, mutate,
+ * COMMIT; any failure rolls everything back).
  */
 import { randomUUID } from "node:crypto";
 import type { Client, PoolClient } from "pg";
@@ -141,7 +141,7 @@ export const TRANSITIONS: readonly Transition[] = [
   // for issue #8 per audit §6(f).
 ];
 
-const TERMINAL_STATES: readonly VentureState[] = ["archived"];
+export const TERMINAL_STATES: readonly VentureState[] = ["archived"];
 
 export function nextTransition(from: VentureState): Transition | null {
   return TRANSITIONS.find((t) => t.from === from) ?? null;
@@ -226,143 +226,96 @@ function requireNonEmpty(value: string | undefined | null, what: string): string
 // --- Public API -----------------------------------------------------------------
 
 /**
- * Create a venture AT G-01 PASS (Part V §1.2: venture ids are minted at G-01;
- * before that, the opportunity is a knowledge item, not a venture). Requires a
- * non-empty `opportunityRef` (the pre-G-01 opportunity brief / KI) and a
- * non-empty `drRef` (the G-01 authorization / DR — full protocol validation is
- * issue #9). Mints `V-yyyy-seq` race-free under the event-chain advisory lock
- * and creates the row directly in 'trend_analysis' (stage 2).
+ * INTERNAL gate-system primitive (issue #9) — mint a venture at G-01 pass.
+ *
+ * Contract: the caller (gates.ts) has ALREADY opened the transaction, acquired
+ * the event-chain advisory lock, and validated the full G-01 protocol. This
+ * function opens no transaction, takes no lock, and emits NO event: it mints
+ * `V-yyyy-seq` from the per-year counter, inserts the row in the birth state
+ * ('trend_analysis', Part V §1.2), and returns the effect so the caller can
+ * build the single `gate_passed` event. Production code other than gates.ts
+ * must not call this (enforced by ops/check-gate-bypass.mjs).
+ *
+ * @internal
  */
-export async function createVenture(
+export async function mintVentureAtG01Tx(
   client: Queryable,
-  input: {
-    name: string;
-    actor: string;
-    opportunityRef: string;
-    drRef: string;
-    year?: number;
-  },
-): Promise<{ id: string; state: VentureState; eventId: string }> {
+  input: { name: string; opportunityRef: string; drRef: string; year?: number },
+): Promise<{ id: string; state: VentureState }> {
   if (!input.name.trim()) throw new Error("venture name must be non-empty");
   const opportunityRef = requireNonEmpty(input.opportunityRef, "opportunityRef (opportunity brief / KI)");
   const drRef = requireNonEmpty(input.drRef, "drRef (G-01 authorization)");
   const year = input.year ?? new Date().getUTCFullYear();
-  return inTransaction(client, async () => {
-    // Advisory lock FIRST (consistent order), explicitly — the id must be
-    // computed before the event that records it.
-    await acquireEventChainLock(client);
-    const { rows } = await client.query<{ last_seq: number }>(
-      `INSERT INTO venture_counters (year, last_seq) VALUES ($1, 1)
-       ON CONFLICT (year) DO UPDATE SET last_seq = venture_counters.last_seq + 1
-       RETURNING last_seq`,
-      [year],
-    );
-    const id = `V-${year}-${rows[0].last_seq}`;
-    await client.query(
-      `INSERT INTO ventures (id, name, state, opportunity_ref, entry_dr_ref)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, input.name, ENTRY_STATE, opportunityRef, drRef],
-    );
-    const eventId = await logVentureEventTx(client, {
-      actorId: input.actor,
-      eventType: "venture.created",
-      ventureId: id,
-      payload: {
-        name: input.name,
-        state: ENTRY_STATE,
-        entry_gate_id: ENTRY_GATE,
-        opportunity_ref: opportunityRef,
-        dr_ref: drRef,
-      },
-    });
-    return { id, state: ENTRY_STATE, eventId };
-  });
+  const { rows } = await client.query<{ last_seq: number }>(
+    `INSERT INTO venture_counters (year, last_seq) VALUES ($1, 1)
+     ON CONFLICT (year) DO UPDATE SET last_seq = venture_counters.last_seq + 1
+     RETURNING last_seq`,
+    [year],
+  );
+  const id = `V-${year}-${rows[0].last_seq}`;
+  await client.query(
+    `INSERT INTO ventures (id, name, state, opportunity_ref, entry_dr_ref)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [id, input.name, ENTRY_STATE, opportunityRef, drRef],
+  );
+  return { id, state: ENTRY_STATE };
 }
 
 /**
- * Advance a venture one stage via a GATE PASS. Only 'gate_pass' transitions
- * are accepted — the 2->3 handoff must go through `handoffStage`. Validates,
- * inside the serialized transaction: the venture exists; it is not archived;
- * its actual state equals `expectedFrom`; that state has a next legal
- * transition of kind 'gate_pass'; `gateId` is EXACTLY that transition's gate;
- * and, when leaving 'analysis', that all five checklist items are complete,
- * each with a non-empty artifact reference. `drRef` (the authorizing DR) is
- * required and recorded; full DR/approval validation is issue #9.
+ * INTERNAL gate-system primitive (issue #9) — apply one gated advance.
+ *
+ * Contract: the caller (gates.ts) has ALREADY opened the transaction, acquired
+ * the event-chain advisory lock, and validated the full gate protocol. This
+ * function opens no transaction and emits NO event: it locks the venture row,
+ * derives the next legal transition FROM THE ROW'S ACTUAL STATE (never from
+ * caller-supplied from/to), verifies it is a 'gate_pass' transition whose gate
+ * is exactly `gateId`, enforces the five-artifact rule when leaving
+ * 'analysis', applies the UPDATE, and returns the effect so the caller can
+ * build the single `gate_passed` event. Production code other than gates.ts
+ * must not call this (enforced by ops/check-gate-bypass.mjs).
+ *
+ * @internal
  */
-export async function advanceStage(
+export async function advanceVentureForGateTx(
   client: Queryable,
-  input: {
-    ventureId: string;
-    expectedFrom: VentureState;
-    gateId: string;
-    actor: string;
-    drRef: string;
-    approvalRef?: string | null;
-  },
-): Promise<{ from: VentureState; to: VentureState; eventId: string }> {
-  if (!input.drRef?.trim()) {
-    throw new Error("authorization required: drRef (DR reference) must be non-empty");
+  input: { ventureId: string; gateId: string },
+): Promise<{ from: VentureState; to: VentureState }> {
+  const row = await lockVenture(client, input.ventureId);
+  if (row.state === "archived") {
+    throw new Error(`venture ${row.id} is archived; no further transitions are possible`);
   }
-  const t = TRANSITIONS.find((x) => x.from === input.expectedFrom);
+  const t = nextTransition(row.state);
   if (!t) {
-    throw new Error(
-      `no legal transition from '${input.expectedFrom}'` +
-        (TERMINAL_STATES.includes(input.expectedFrom) ? " (terminal state)" : ""),
-    );
+    throw new Error(`no legal transition from '${row.state}'`);
   }
   if (t.kind === "handoff") {
     throw new Error(
-      `transition ${t.from} -> ${t.to} is an intra-envelope handoff, not a gate pass — use handoffStage()`,
+      `venture ${row.id} is in '${row.state}': the next step is the ${t.from} -> ${t.to} ` +
+        "intra-envelope handoff (handoffStage), not a gate pass",
     );
   }
   if (t.gate !== input.gateId) {
     throw new Error(
-      `wrong gate: transition ${t.from} -> ${t.to} requires ${t.gate}, got ${input.gateId}`,
+      `wrong gate for venture state: ${row.id} is in '${row.state}', whose next transition ` +
+        `${t.from} -> ${t.to} requires ${t.gate}, got ${input.gateId}`,
     );
   }
-  return inTransaction(client, async () => {
-    // Provisional event first (advisory lock = first lock, consistent order).
-    // Rolled back if any validation below fails.
-    const eventId = await logVentureEventTx(client, {
-      actorId: input.actor,
-      eventType: "venture.stage_advanced",
-      ventureId: input.ventureId,
-      payload: {
-        from: t.from,
-        to: t.to,
-        transition_kind: "gate_pass",
-        gate_id: t.gate,
-        dr_ref: input.drRef,
-        approval_ref: input.approvalRef ?? null,
-      },
-    });
-
-    const row = await lockVenture(client, input.ventureId);
-    if (row.state === "archived") {
-      throw new Error(`venture ${row.id} is archived; no further transitions are possible`);
-    }
-    if (row.state !== input.expectedFrom) {
+  if (t.from === "analysis") {
+    const missing = ANALYSIS_ITEMS.filter(
+      (i) => !row.analysis_checklist?.[i]?.evidence_ref?.trim(),
+    );
+    if (missing.length) {
       throw new Error(
-        `stale state: expected '${input.expectedFrom}' but venture is in '${row.state}'`,
+        `analysis block incomplete: missing filed artifact for ${missing.join(", ")} — ` +
+          "G-04 is conjunctive (all five outputs required)",
       );
     }
-    if (t.from === "analysis") {
-      const missing = ANALYSIS_ITEMS.filter(
-        (i) => !row.analysis_checklist?.[i]?.evidence_ref?.trim(),
-      );
-      if (missing.length) {
-        throw new Error(
-          `analysis block incomplete: missing filed artifact for ${missing.join(", ")} — ` +
-            "G-04 is conjunctive (all five outputs required)",
-        );
-      }
-    }
-    await client.query("UPDATE ventures SET state = $2, updated_at = now() WHERE id = $1", [
-      row.id,
-      t.to,
-    ]);
-    return { from: t.from, to: t.to, eventId };
-  });
+  }
+  await client.query("UPDATE ventures SET state = $2, updated_at = now() WHERE id = $1", [
+    row.id,
+    t.to,
+  ]);
+  return { from: t.from, to: t.to };
 }
 
 /**
