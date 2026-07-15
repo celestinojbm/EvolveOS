@@ -4,13 +4,23 @@
   Part VII §8.2 order. This file documents the shape; the renderer is the source
   of truth. Never hand-edit a brief to add options, scores, or risks the DR does
   not contain, and never truncate dissent to fit the page budget.
+
+  The renderer takes a full StoredDecisionRecord and verifies it
+  CRYPTOGRAPHICALLY before rendering (pure, no DB): the document must hash to
+  the record's digest and canonical bytes, and the record's id/amends link must
+  match the document — otherwise DecisionBriefIntegrityError. A brief can never
+  show content that does not correspond to the digest printed in §6.
 -->
 
 # Decision Brief — `DR-<yyyy>-<seq>`
 
 ## 1. The ask
 
-`<decision, one sentence>` — reversibility **`<R1|R2|R3|R4>`**, gate **`<G-nn or —>`**`<, envelope delta: … when present>`.
+`<decision, one sentence>` — reversibility **`<R1|R2|R3|R4>`**, gate **`<G-nn or —>`**.
+
+Part VII §8.2 also names the envelope delta here; the Phase 0 DR schema has no
+envelope field (envelopes are unratified per ADR-006 and v0 authorizes no
+spend), so no delta exists to show — and none is invented.
 
 ## 2. Options
 
@@ -25,6 +35,14 @@ absent scores are never invented. For **R3/R4** decisions every option MUST
 carry a non-empty `predicted_outcome_distribution` (filing rejects it
 otherwise), so this table always shows real uncertainty for material decisions;
 for R1/R2 the field is optional and an absent distribution renders as `—`.
+
+Part VII admits multiple distribution representations, and an unrecognized one
+is never hidden: when none of the known fields (`primary_metric`,
+`representation`, `quantiles`) are present, the *predicted outcome* cell shows
+the distribution's deterministic canonical JSON (markdown-escaped), and the
+*uncertainty* cell falls back `epistemic_share` → `representation` → the
+explicit note `structured distribution — see predicted outcome`. A valid,
+non-empty distribution never renders as `—`.
 
 ## 3. Top three risks
 

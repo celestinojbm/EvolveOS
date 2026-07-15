@@ -631,14 +631,19 @@ describe("gate system v0 — content binding + reversibility", () => {
     return id;
   }
 
-  it("the gate binds to the FILED bytes: a stale in-memory copy cannot change the pass", async () => {
+  it("the gate binds to the FILED bytes: the filing result is frozen, and only the id reaches the gate", async () => {
     const vid = await ventureTo(client, actors, "research");
     const filed = await fileDR(client, actors, { gateId: "G-02" });
     const approvalEventId = await approveDR(client, actors, filed);
-    // Mutate the caller's in-memory document — the gate loads the immutable
-    // stored copy by id, so the mutation is irrelevant.
-    filed.document.decision = "changed in memory";
-    filed.document.gate_id = "G-99";
+    // Since issue #10 round 3 the filing result is DEEP-frozen — a stale
+    // in-memory copy cannot even be produced by mutating it...
+    expect(() => {
+      (filed.document as { decision: string }).decision = "changed in memory";
+    }).toThrow(TypeError);
+    expect(() => {
+      (filed.document as { gate_id: string }).gate_id = "G-99";
+    }).toThrow(TypeError);
+    // ...and the gate takes only the id anyway, loading the immutable stored copy.
     const r = await passPipelineGate(client, {
       gateId: "G-02", ventureId: vid, decisionRecordId: filed.drId, approvalEventId, actor: "op",
     });

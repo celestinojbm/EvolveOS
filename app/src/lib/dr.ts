@@ -468,7 +468,10 @@ async function fileInternal(
       id,
       digest: snap.digest,
       eventId: event.id,
-      document: snap.document,
+      // Deep-frozen: the filing result represents ARCHIVED bytes — the caller
+      // must not be able to locally mutate an object that claims to be them.
+      // (Canonicalization already happened; freezing changes nothing hashed.)
+      document: deepFreeze(snap.document),
       amendsDrId: captured.amendsDrId,
     };
   });
@@ -728,17 +731,39 @@ export class DecisionBriefTooLong extends Error {
   }
 }
 
+/**
+ * Thrown when the record handed to `renderDecisionBrief` is not internally
+ * consistent: the document does not hash to the record's digest / canonical
+ * bytes, or the record's id / amendment link disagree with the document. The
+ * brief prints the digest as its provenance — it must never show content that
+ * does not correspond to it.
+ */
+export class DecisionBriefIntegrityError extends Error {
+  constructor(recordId: string, detail: string) {
+    super(`decision brief integrity failure for ${recordId}: ${detail}`);
+    this.name = "DecisionBriefIntegrityError";
+  }
+}
+
 function countWords(md: string): number {
   const t = md.trim();
   return t.length === 0 ? 0 : t.split(/\s+/).length;
 }
 
+/** A recognized field only counts when it is a NON-BLANK string — a blank
+ * `primary_metric`/`representation` must not swallow the canonical fallback
+ * (it would render an empty cell, hiding the distribution more thoroughly
+ * than "—" ever did). */
+function nonBlankString(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
 function outcomeCell(o: DecisionRecordOption): string {
   const d = o.predicted_outcome_distribution;
-  if (!d || typeof d !== "object") return "—";
+  if (!d || typeof d !== "object" || Object.keys(d).length === 0) return "—";
   const parts: string[] = [];
-  if (typeof d.primary_metric === "string") parts.push(String(d.primary_metric));
-  if (typeof d.representation === "string") parts.push(`(${String(d.representation)})`);
+  if (nonBlankString(d.primary_metric)) parts.push(d.primary_metric);
+  if (nonBlankString(d.representation)) parts.push(`(${d.representation})`);
   if (d.quantiles && typeof d.quantiles === "object") {
     const q = d.quantiles as Record<string, unknown>;
     const bits = Object.keys(q)
@@ -746,17 +771,23 @@ function outcomeCell(o: DecisionRecordOption): string {
       .join(", ");
     if (bits) parts.push(bits);
   }
-  return parts.length ? mdEscape(parts.join(" ")) : "—";
+  if (parts.length) return mdEscape(parts.join(" "));
+  // Part VII admits multiple representations — a valid, non-empty distribution
+  // with no recognized (non-blank) fields is still rendered, deterministically,
+  // from its canonical form. It never disappears into "—" or an empty cell.
+  return mdEscape(canonicalize(d));
 }
 
 function uncertaintyCell(o: DecisionRecordOption): string {
   const d = o.predicted_outcome_distribution;
-  if (!d || typeof d !== "object") return "—";
+  if (!d || typeof d !== "object" || Object.keys(d).length === 0) return "—";
   if (typeof d.epistemic_share === "number") {
     return `epistemic share ${d.epistemic_share}`;
   }
-  if (typeof d.representation === "string") return mdEscape(String(d.representation));
-  return "—";
+  if (nonBlankString(d.representation)) return mdEscape(d.representation);
+  // A recorded distribution with no recognized uncertainty fields is declared
+  // explicitly — never hidden behind "—" or an empty cell.
+  return "structured distribution — see predicted outcome";
 }
 
 /** Escape the pipe and newline characters that would break a markdown table cell. */
@@ -766,29 +797,64 @@ function mdEscape(s: string): string {
 
 /**
  * Render a filed DR into a deterministic ≤2-page markdown decision brief, in the
- * exact Part VII §8.2 order. Dissent is reproduced VERBATIM and never
- * summarized; at most three risks are surfaced (the rest are pointed to, not
- * hidden). Throws `DecisionBriefTooLong` if the mandatory content exceeds the
- * word budget.
+ * exact Part VII §8.2 order. Takes a full `StoredDecisionRecord` and VERIFIES it
+ * cryptographically before rendering — pure (no DB), but the brief can only be
+ * produced from an internally consistent record: the document is re-snapshotted
+ * (deep clone + validation + canonicalization + SHA-256) and must reproduce the
+ * record's digest and canonical bytes, and the record's `id` / `amendsDrId`
+ * must match the document. Any mismatch throws `DecisionBriefIntegrityError` —
+ * the brief never shows content that does not correspond to the digest it
+ * prints. Rendering then uses the VERIFIED snapshot clone, not the caller's
+ * object. Dissent is reproduced VERBATIM and never summarized; at most three
+ * risks are surfaced (the rest are pointed to, not hidden). Throws
+ * `DecisionBriefTooLong` if the mandatory content exceeds the word budget.
  */
-export function renderDecisionBrief(record: {
-  document: DecisionRecordDoc;
-  digest: string;
-  amendsDrId?: string | null;
-}): string {
-  const dr = record.document;
-  const amendsDrId = record.amendsDrId ?? dr.amends_dr_id ?? null;
+export function renderDecisionBrief(record: StoredDecisionRecord): string {
+  let snap: DrContentSnapshot;
+  try {
+    snap = snapshotDecisionRecordContent(record.document);
+  } catch (err) {
+    throw new DecisionBriefIntegrityError(
+      record.id,
+      `the document no longer validates: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (snap.digest !== record.digest) {
+    throw new DecisionBriefIntegrityError(
+      record.id,
+      `document hashes to ${snap.digest.slice(0, 12)}…, record claims ${record.digest.slice(0, 12)}…`,
+    );
+  }
+  if (snap.canonicalJson !== record.canonicalJson) {
+    throw new DecisionBriefIntegrityError(
+      record.id,
+      "document does not canonicalize to the record's canonical JSON",
+    );
+  }
+  if (snap.document.id !== record.id) {
+    throw new DecisionBriefIntegrityError(
+      record.id,
+      `document carries id '${snap.document.id}'`,
+    );
+  }
+  if ((snap.document.amends_dr_id ?? null) !== record.amendsDrId) {
+    throw new DecisionBriefIntegrityError(
+      record.id,
+      `document amends_dr_id '${snap.document.amends_dr_id ?? "null"}' does not match the record's '${record.amendsDrId ?? "null"}'`,
+    );
+  }
+  const dr = snap.document; // the VERIFIED clone — never the caller's object
+  const amendsDrId = record.amendsDrId;
   const lines: string[] = [];
 
   lines.push(`# Decision Brief — ${dr.id}`, "");
 
-  // 1. The ask.
-  const drAny = dr as unknown as Record<string, unknown>;
-  const envelope =
-    typeof drAny.envelope_delta === "string" ? `, envelope delta: ${drAny.envelope_delta}` : "";
+  // 1. The ask. §8.2 also names the envelope delta; the Phase 0 DR schema has
+  // no envelope field because envelopes are unratified (ADR-006) and v0
+  // authorizes no spend — so no delta exists to show, and none is invented.
   lines.push("## 1. The ask", "");
   lines.push(
-    `${dr.decision.trim()} — reversibility **${dr.reversibility_class}**, gate **${dr.gate_id ?? "—"}**${envelope}.`,
+    `${dr.decision.trim()} — reversibility **${dr.reversibility_class}**, gate **${dr.gate_id ?? "—"}**.`,
     "",
   );
 

@@ -11,6 +11,7 @@ import {
   renderDecisionBrief,
   DecisionRecordInvalid,
   DecisionBriefTooLong,
+  DecisionBriefIntegrityError,
   DR_SCHEMA_VERSION,
   DECISION_BRIEF_WORD_LIMIT,
   type DecisionRecordInput,
@@ -282,6 +283,47 @@ describe("decision records — filing, ids, atomicity (Postgres)", () => {
     expect(digestDecisionRecordContent(JSON.parse(rows[0].canonical_json))).toBe(r.digest);
   });
 
+  it("filing results are DEEP-frozen: the returned document cannot be mutated", async () => {
+    const filed = await fileDecisionRecord(client, {
+      document: validContent(),
+      filedBy: "P",
+      year: freshDrYear(),
+    });
+    expect(Object.isFrozen(filed.document)).toBe(true);
+    expect(() => {
+      (filed.document as { title: string }).title = "tampered";
+    }).toThrow(TypeError);
+    expect(() => {
+      filed.document.options!.push({ option_id: "opt-evil", summary: "injected" });
+    }).toThrow(TypeError);
+    expect(() => {
+      (filed.document.options![0] as { summary: string }).summary = "tampered";
+    }).toThrow(TypeError);
+    expect(() => {
+      (filed.document.options![0].predicted_outcome_distribution as Record<string, unknown>).p = 1;
+    }).toThrow(TypeError);
+    expect(() => {
+      filed.document.risks!.push("injected");
+    }).toThrow(TypeError);
+    expect(() => {
+      (filed.document.dissent_record![0] as { argument: string }).argument = "tampered";
+    }).toThrow(TypeError);
+    expect(() => {
+      filed.document.kill_criteria!.push("injected");
+    }).toThrow(TypeError);
+
+    const amendment = await fileDecisionRecordAmendment(client, {
+      amendsDrId: filed.id,
+      document: validContent({ decision: "Amended." }),
+      filedBy: "P",
+      year: freshDrYear(),
+    });
+    expect(Object.isFrozen(amendment.document)).toBe(true);
+    expect(() => {
+      amendment.document.options!.push({ option_id: "opt-evil", summary: "injected" });
+    }).toThrow(TypeError);
+  });
+
   it("rejects an invalid DR at filing with DecisionRecordInvalid (field errors)", async () => {
     await expect(
       fileDecisionRecord(client, {
@@ -332,16 +374,23 @@ describe("decision records — filing, ids, atomicity (Postgres)", () => {
 
   it("event-append failure leaves no decision_records row", async () => {
     const year = freshDrYear();
+    // Delta, not an absolute count: rows are append-only and years can recur
+    // across suite runs on a reused DB, so a prior run may already own rows in
+    // this year band. Only THIS attempt must leave nothing behind.
+    const countRows = async () => {
+      const { rows } = await client.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM decision_records WHERE id LIKE $1",
+        [`DR-${year}-%`],
+      );
+      return rows[0].n;
+    };
+    const before = await countRows();
     await expect(
       withInsertBlocked(client, "events", () =>
         fileDecisionRecord(client, { document: validContent(), filedBy: "P", year }),
       ),
     ).rejects.toThrow(/dr-injected/i);
-    const { rows } = await client.query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM decision_records WHERE id LIKE $1",
-      [`DR-${year}-%`],
-    );
-    expect(rows[0].n).toBe(0);
+    expect(await countRows()).toBe(before);
   });
 });
 
@@ -465,17 +514,21 @@ describe("decision records — amendments (Postgres)", () => {
     ).rejects.toThrow(/non-existent decision record/i);
   });
 
-  it("a self-referential amendment is rejected at the DB layer", async () => {
+  it("a self-referential amendment is rejected at the DB layer (no_self_amend specifically)", async () => {
     // Direct INSERT (a test may exercise the store directly) with amends_dr_id = id.
     const ev = await appendEvent(client, {
       id: `EV-selfamend-${runId}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: new Date().toISOString(),
       actor_type: "human",
       actor_id: "P",
-      event_type: "decision_record.filed",
+      event_type: "decision_record.amended",
     });
     const id = freshRawId();
-    const doc = JSON.stringify({ id });
+    // Postgres fires table CHECKs in constraint-NAME order, so the document
+    // must SATISFY all three doc-binding CHECKs (matching id, schema_version,
+    // and amends_dr_id = id) — otherwise doc_amends_match, alphabetically
+    // first, fires instead and no_self_amend is never actually exercised.
+    const doc = JSON.stringify({ id, schema_version: DR_SCHEMA_VERSION, amends_dr_id: id });
     await expect(
       client.query(
         `INSERT INTO decision_records
@@ -483,7 +536,7 @@ describe("decision records — amendments (Postgres)", () => {
          VALUES ($1,$2,$3,$4,$5,$1,$6,'P')`,
         [id, doc, doc, "0".repeat(64), DR_SCHEMA_VERSION, ev.id],
       ),
-    ).rejects.toThrow(/no_self_amend|check/i);
+    ).rejects.toThrow(/decision_records_no_self_amend/);
   });
 });
 
@@ -633,7 +686,7 @@ describe("decision records — corruption is rejected on read (Postgres)", () =>
     const otherId = freshRawId();
     // (a) The DB backstop makes it unrepresentable by direct INSERT.
     await expect(insertRaw({ id: rowId, doc: fullDoc(otherId) })).rejects.toThrow(
-      /decision_records_doc_id_match|check/i,
+      /decision_records_doc_id_match/,
     );
     // (b) Belt-and-suspenders: with the CHECK dropped (rolled back), the READ
     // layer still rejects the mismatch.
@@ -649,7 +702,7 @@ describe("decision records — corruption is rejected on read (Postgres)", () =>
   it("5. column schema_version ≠ document: DB CHECK AND read both reject", async () => {
     const id = freshRawId();
     await expect(insertRaw({ id, doc: fullDoc(id), schemaVersion: "9.9.9" })).rejects.toThrow(
-      /decision_records_doc_schema_version_match|check/i,
+      /decision_records_doc_schema_version_match/,
     );
     await withDroppedConstraint(
       "decision_records_doc_schema_version_match",
@@ -667,7 +720,7 @@ describe("decision records — corruption is rejected on read (Postgres)", () =>
     // Document says null; column says it amends `target`. IS NOT DISTINCT FROM
     // in the CHECK makes this a real FALSE (a plain `=` would be NULL and pass).
     await expect(insertRaw({ id, doc: fullDoc(id), amendsCol: target.id })).rejects.toThrow(
-      /decision_records_doc_amends_match|check/i,
+      /decision_records_doc_amends_match/,
     );
     await withDroppedConstraint(
       "decision_records_doc_amends_match",
@@ -676,6 +729,27 @@ describe("decision records — corruption is rejected on read (Postgres)", () =>
         await expect(getDecisionRecord(client, id)).rejects.toThrow(/amends_dr_id/i);
       },
     );
+  });
+
+  it("6b. document_json MISSING 'id' or 'schema_version' is rejected (NULL-safe CHECKs)", async () => {
+    // With a plain `=` these CHECKs would evaluate to NULL (missing key ->> NULL)
+    // and PASS; IS NOT DISTINCT FROM makes a one-sided NULL a real FALSE.
+    const idA = freshRawId();
+    await expect(
+      insertRaw({
+        id: idA,
+        doc: fullDoc(idA),
+        documentJson: JSON.stringify({ schema_version: DR_SCHEMA_VERSION }), // no 'id'
+      }),
+    ).rejects.toThrow(/decision_records_doc_id_match/);
+    const idB = freshRawId();
+    await expect(
+      insertRaw({
+        id: idB,
+        doc: fullDoc(idB),
+        documentJson: JSON.stringify({ id: idB }), // no 'schema_version'
+      }),
+    ).rejects.toThrow(/decision_records_doc_schema_version_match/);
   });
 
   it("7. file_event_id pointing at an event of another type is rejected", async () => {
@@ -796,6 +870,172 @@ describe("decision records — brief renderer (Part VII §8.2)", () => {
     expect(brief).toContain("Disable the feature flag");
     expect(brief).toContain(`\`${filed.id}\``);
     expect(brief).toContain(`\`${filed.digest}\``);
+  });
+
+  it("brief binding: a tampered document with the original digest is rejected", async () => {
+    const filed = await fileDecisionRecord(client, {
+      document: validContent(),
+      filedBy: actors.proposer,
+      year: freshDrYear(),
+    });
+    const rec = (await getDecisionRecord(client, filed.id))!;
+
+    // Three tampered copies, each carrying the ORIGINAL digest/canonical JSON.
+    const tamperDecision = JSON.parse(rec.canonicalJson);
+    tamperDecision.decision = "a materially different decision";
+    expect(() => renderDecisionBrief({ ...rec, document: tamperDecision })).toThrow(
+      DecisionBriefIntegrityError,
+    );
+
+    const tamperOption = JSON.parse(rec.canonicalJson);
+    tamperOption.options[0].summary = "a tampered option summary";
+    expect(() => renderDecisionBrief({ ...rec, document: tamperOption })).toThrow(
+      DecisionBriefIntegrityError,
+    );
+
+    const tamperDissent = JSON.parse(rec.canonicalJson);
+    tamperDissent.dissent_record[0].argument = "dissent silently rewritten";
+    expect(() => renderDecisionBrief({ ...rec, document: tamperDissent })).toThrow(
+      DecisionBriefIntegrityError,
+    );
+
+    // The untampered record still renders.
+    expect(renderDecisionBrief(rec)).toContain(rec.digest);
+  });
+
+  it("brief binding: fake digest / fake canonical / id mismatch / amends mismatch are rejected", async () => {
+    const filed = await fileDecisionRecord(client, {
+      document: validContent(),
+      filedBy: actors.proposer,
+      year: freshDrYear(),
+    });
+    const rec = (await getDecisionRecord(client, filed.id))!;
+
+    expect(() => renderDecisionBrief({ ...rec, digest: "0".repeat(64) })).toThrow(
+      DecisionBriefIntegrityError,
+    );
+    expect(() =>
+      renderDecisionBrief({ ...rec, canonicalJson: rec.canonicalJson.replace("Ship", "Sink") }),
+    ).toThrow(DecisionBriefIntegrityError);
+    expect(() => renderDecisionBrief({ ...rec, id: "DR-9999-1" })).toThrow(
+      DecisionBriefIntegrityError,
+    );
+    expect(() => renderDecisionBrief({ ...rec, amendsDrId: "DR-9999-2" })).toThrow(
+      DecisionBriefIntegrityError,
+    );
+  });
+
+  it("a valid distribution with only unrecognized fields still renders (never '—')", async () => {
+    const content = validContent();
+    content.options![1].predicted_outcome_distribution = {
+      confidence_interval: "10–20 activated customers",
+      confidence_level: 0.8,
+    };
+    const filed = await fileDecisionRecord(client, {
+      document: content,
+      filedBy: actors.proposer,
+      year: freshDrYear(),
+    });
+    const brief = renderDecisionBrief((await getDecisionRecord(client, filed.id))!);
+    const row = brief.split("\n").find((l) => l.includes("`opt-defer`"))!;
+    // Deterministic canonical rendering of the unknown shape, in the option row.
+    expect(row).toContain("confidence_interval");
+    expect(row).toContain("10–20 activated customers");
+    expect(row).toContain("0.8");
+    // Uncertainty declares the recorded distribution instead of hiding it.
+    expect(row).toContain("structured distribution");
+    // Neither cell is the bare "—" placeholder.
+    const cells = row.split("|").map((c) => c.trim());
+    expect(cells).not.toContain("—");
+  });
+
+  it("R2 with an EMPTY {} distribution renders both cells as exactly '—' (not canonical '{}')", async () => {
+    // {} is filable for R1/R2 (the non-empty rule is R3/R4-only). It carries no
+    // information, so it renders as the absent-distribution placeholder — not
+    // as canonical "{}" plus a misleading "structured distribution" note.
+    const filed = await fileDecisionRecord(client, {
+      document: validContent({
+        reversibility_class: "R2",
+        options: [{ option_id: "solo", summary: "Only path.", predicted_outcome_distribution: {} }],
+        chosen_option: "solo",
+      }),
+      filedBy: actors.proposer,
+      year: freshDrYear(),
+    });
+    const brief = renderDecisionBrief((await getDecisionRecord(client, filed.id))!);
+    const row = brief.split("\n").find((l) => l.includes("`solo`"))!;
+    const cells = row.split("|").map((c) => c.trim());
+    // | `solo` | ✓ | Only path. | — | — |  → outcome and uncertainty cells.
+    expect(cells[4]).toBe("—");
+    expect(cells[5]).toBe("—");
+    expect(row).not.toContain("structured distribution");
+  });
+
+  it("blank recognized fields do not blank the cells: the canonical fallback still fires", async () => {
+    const filed = await fileDecisionRecord(client, {
+      document: validContent({
+        options: [
+          {
+            option_id: "opt-a",
+            summary: "A.",
+            predicted_outcome_distribution: { primary_metric: "" }, // blank but "recognized"
+          },
+          {
+            option_id: "opt-b",
+            summary: "B.",
+            predicted_outcome_distribution: { representation: "  " }, // whitespace-only
+          },
+        ],
+        chosen_option: "opt-a",
+      }),
+      filedBy: actors.proposer,
+      year: freshDrYear(),
+    });
+    const brief = renderDecisionBrief((await getDecisionRecord(client, filed.id))!);
+    const rowA = brief.split("\n").find((l) => l.includes("`opt-a`"))!;
+    const rowB = brief.split("\n").find((l) => l.includes("`opt-b`"))!;
+    // Blank recognized fields are treated as unrecognized: the outcome cell
+    // shows the canonical JSON (never an empty cell or a bare "()" token), and
+    // the uncertainty cell falls through to the explicit note.
+    expect(rowA).toContain('{"primary_metric":""}');
+    expect(rowA).toContain("structured distribution");
+    expect(rowB).toContain('{"representation":"  "}');
+    expect(rowB).toContain("structured distribution");
+    for (const row of [rowA, rowB]) {
+      const cells = row.split("|").map((c) => c.trim());
+      expect(cells[4]).not.toBe("");
+      expect(cells[5]).not.toBe("");
+      expect(cells[4]).not.toBe("()");
+    }
+  });
+
+  it("the brief renders from the VERIFIED snapshot clone, never the caller's object", async () => {
+    const filed = await fileDecisionRecord(client, {
+      document: validContent(),
+      filedBy: actors.proposer,
+      year: freshDrYear(),
+    });
+    const rec = (await getDecisionRecord(client, filed.id))!;
+    const honest = JSON.parse(rec.canonicalJson) as Record<string, unknown>;
+    // A booby-trapped document: `decision` returns the honest value on its
+    // FIRST read (consumed by canonicalize during the integrity snapshot) and
+    // tampered text on every later read. The snapshot's JSON clone strips the
+    // getter, so rendering from the verified clone shows the honest text; a
+    // regression that rendered from record.document would show the tampered
+    // text NEXT TO the honest digest.
+    let reads = 0;
+    const trap = { ...honest };
+    Object.defineProperty(trap, "decision", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1;
+        return reads === 1 ? honest.decision : "TAMPERED-AFTER-SNAPSHOT";
+      },
+    });
+    const brief = renderDecisionBrief({ ...rec, document: trap as never });
+    expect(brief).toContain((honest.decision as string).trim());
+    expect(brief).not.toContain("TAMPERED-AFTER-SNAPSHOT");
   });
 
   it("filing an R3 DR with an option lacking a distribution is rejected", async () => {

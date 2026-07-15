@@ -38,16 +38,16 @@ CREATE TABLE IF NOT EXISTS decision_records (
     -- Column <-> document binding backstops: the queryable projection can never
     -- disagree with the row identity/version/amendment-link even by direct
     -- INSERT (dr.ts re-checks the same bindings — plus the canonical bytes and
-    -- the filing event — at read time).
+    -- the filing event — at read time). All three use IS NOT DISTINCT FROM:
+    -- NULL-safe equality. A plain `=` evaluates to NULL when either side is
+    -- NULL, and a NULL CHECK passes — so a document_json MISSING the key would
+    -- silently satisfy the very constraint meant to reject it.
     CONSTRAINT decision_records_doc_id_match
-        CHECK (document_json->>'id' = id),
+        CHECK ((document_json->>'id') IS NOT DISTINCT FROM id),
     CONSTRAINT decision_records_doc_schema_version_match
-        CHECK (document_json->>'schema_version' = schema_version),
-    -- IS NOT DISTINCT FROM: NULL-safe equality. A plain `=` would evaluate to
-    -- NULL when either side is NULL, and a NULL CHECK passes — silently
-    -- admitting the exact mismatch this constraint exists to reject.
+        CHECK ((document_json->>'schema_version') IS NOT DISTINCT FROM schema_version),
     CONSTRAINT decision_records_doc_amends_match
-        CHECK (document_json->>'amends_dr_id' IS NOT DISTINCT FROM amends_dr_id)
+        CHECK ((document_json->>'amends_dr_id') IS NOT DISTINCT FROM amends_dr_id)
 );
 
 CREATE INDEX IF NOT EXISTS decision_records_amends_idx ON decision_records (amends_dr_id);
