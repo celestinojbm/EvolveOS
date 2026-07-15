@@ -57,7 +57,7 @@ Registry and spend checks are pure and run before the transaction; the DR is loa
 
 - **1 (pre-registration)** — enforced (kill criteria before the pass, where mandatory).
 - **2 (evidence)** — enforced (full DR + linked approval evidence).
-- **3 (queueing)** — no real queue: any `requestedSpend ≠ 0` is rejected with a specific *"requires manual queue (A1)"* error, because envelopes are unratified (ADR-006) and v0 executes no spend.
+- **3 (queueing)** — no real queue: any `requestedSpend ≠ 0` is rejected with a specific *"requires manual queue (A1)"* error, because envelopes are unratified (ADR-006) and v0 executes no spend. This rejection is **independent of the `real_money` flag** ([RATIFICATION](RATIFICATION.md), issue #11): even when `real_money` is `true`, spend is still rejected here — the flag records that founding ratification happened, it does not authorize or execute any payment (`THR-SPEND-EXEC = $0`).
 - **5 (no gate shopping)** — DR reuse blocked (`dr_id UNIQUE`). Full resubmission validation (a diff against the rejected DR with materially new evidence) is **still deferred beyond issue #10** — the DR store persists and links amendments, but nothing yet validates that a resubmission carries materially new evidence.
 
 ## Boundaries (documented limits)

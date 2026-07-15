@@ -16,6 +16,7 @@
     "check:eventlog": "node ops/check-single-writer.mjs",
     "check:gates": "node ops/check-gate-bypass.mjs",
     "check:dr": "node ops/check-dr-writer.mjs",
+    "check:ratification": "node ops/check-ratification-writer.mjs",
     "verify:events": "node ops/verify-chain.mjs",
     "db:up": "docker compose -f ops/docker-compose.yml up -d",
     "db:down": "docker compose -f ops/docker-compose.yml down -v"

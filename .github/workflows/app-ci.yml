@@ -62,6 +62,9 @@ jobs:
       - name: Decision records have a single writer (no DR-store bypass)
         run: pnpm check:dr
 
+      - name: Ratification + real_money have a single owner (no flag bypass)
+        run: pnpm check:ratification
+
       - name: Migrations apply to a clean DB
         run: pnpm migrate
 
