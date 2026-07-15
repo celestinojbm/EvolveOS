@@ -100,13 +100,32 @@ export function makeDR(opts: {
     dr.rollback_plan = opts.rollbackPlan ?? "Archive; no external commitments were made.";
   }
   if (opts.options !== null) {
+    // Every default option carries a non-empty predicted_outcome_distribution:
+    // R3/R4 DRs (G-05/G-06/G-17/G-18) cannot be filed without one per option.
     dr.options = opts.options ?? [
-      { option_id: "opt-proceed", summary: "Proceed to the next stage now." },
-      { option_id: "opt-defer", summary: "Defer one sprint to gather more evidence." },
+      {
+        option_id: "opt-proceed",
+        summary: "Proceed to the next stage now.",
+        predicted_outcome_distribution: {
+          primary_metric: "stage_success_rate",
+          representation: "qualitative",
+          epistemic_share: 0.5,
+        },
+      },
+      {
+        option_id: "opt-defer",
+        summary: "Defer one sprint to gather more evidence.",
+        predicted_outcome_distribution: {
+          primary_metric: "stage_success_rate",
+          representation: "qualitative",
+          epistemic_share: 0.4,
+        },
+      },
     ];
     dr.chosen_option = "opt-proceed";
   }
-  if (opts.risks) dr.risks = opts.risks;
+  // R3/R4 DRs cannot be filed with zero risks (Part VII §8.2 top risks).
+  dr.risks = opts.risks ?? ["Execution risk at the next stage remains"];
   if (opts.dissent) dr.dissent_record = opts.dissent;
   return dr;
 }

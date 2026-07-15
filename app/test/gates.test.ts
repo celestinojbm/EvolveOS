@@ -799,6 +799,36 @@ describe("gate system v0 — content binding + reversibility", () => {
     // malformed dr_id
     await expect(tryInsert("G-17", null, "s", "s1", "NOT-A-DR")).rejects.toThrow(/check/i);
   });
+
+  it("DB backstop: gate_passes.dr_id must reference a FILED decision record (FK)", async () => {
+    const v = await mintVenture(client, actors);
+    // A fresh event id (not already a UNIQUE gate_event_id) so the FK — not the
+    // gate_event_id UNIQUE — is the only constraint that can reject the row.
+    const ev = await appendEvent(client, {
+      id: `EV-fk-${runId}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: new Date().toISOString(),
+      actor_type: "system",
+      actor_id: "test",
+      event_type: "gate_passed",
+    });
+    // Well-formed shape and dr_id format, but the DR was never filed: only the
+    // issue-#10 FK can reject this row — and it does.
+    await expect(
+      client.query(
+        `INSERT INTO gate_passes (gate_id, dr_id, approval_event_id, gate_event_id, venture_id,
+           subject_type, subject_id, proposer_actor_id, approver_actor_id)
+         VALUES ('G-17', $1, $2, $2, NULL, 'communication', 'subject-x', 'p', 'a')`,
+        [`DR-2097-${Math.floor(Math.random() * 1e6)}`, ev.id],
+      ),
+    ).rejects.toThrow(/gate_passes_dr_id_fk|foreign key/i);
+    // A real filed DR works: every production pass in this suite proves it, and
+    // the mint above already inserted a gate_passes row for its filed DR.
+    const { rows } = await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM gate_passes WHERE dr_id = $1",
+      [v.drId],
+    );
+    expect(rows[0].n).toBe(1);
+  });
 });
 
 describe("gate system v0 — concurrency", () => {

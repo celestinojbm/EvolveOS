@@ -41,9 +41,11 @@ Without approval evidence there is no pass; the gate still requires `approvalEve
 
 ## The store (`ops/migrations/0006_decision_records.sql`)
 
-- `decision_record_counters(year, last_seq)` — per-year sequence for `DR-yyyy-seq`, minted under the event-chain advisory lock (mirrors `venture_counters`); concurrent filings get unique, gap-free ids.
+- `decision_record_counters(year, last_seq)` — per-year sequence for `DR-yyyy-seq`, minted under the event-chain advisory lock (mirrors `venture_counters`); concurrent filings get unique, gap-free ids. CHECKs: `year` in 1000–9999, `last_seq > 0`.
 - `decision_records` — `id` (format-checked), `canonical_json` (**the exact hashed bytes**, TEXT), `document_json` (JSONB projection), `content_digest` (SHA-256-hex checked), `schema_version`, `amends_dr_id` (nullable self-FK, `<> id` CHECK), `file_event_id` (UNIQUE FK to `events`), `filed_by`, `filed_at`.
-- **Append-only**: `BEFORE UPDATE/DELETE/TRUNCATE` triggers raise (the same discipline as `events`). JSONB is a projection, **never** the canonical representation — reads verify `canonicalize(document_json) = canonical_json`.
+- **Column↔document binding CHECKs**: `document_json->>'id' = id`, `document_json->>'schema_version' = schema_version`, and `document_json->>'amends_dr_id' IS NOT DISTINCT FROM amends_dr_id` (NULL-safe on purpose — a plain `=` evaluates to NULL on a one-sided NULL and a NULL CHECK *passes*). A projection that disagrees with the row identity/version/amendment-link is unrepresentable even by direct INSERT.
+- **`gate_passes.dr_id` FK** → `decision_records(id)`, added idempotently via a `pg_constraint` catalog check in a `DO` block (`ADD CONSTRAINT IF NOT EXISTS` is not uniformly available). This closes the issue-#9 seam: a gate pass cannot cite an unfiled DR even by direct INSERT.
+- **Append-only**: `BEFORE UPDATE/DELETE/TRUNCATE` triggers raise (the same discipline as `events`); a plain `TRUNCATE` is additionally blocked by the incoming FK. JSONB is a projection, **never** the canonical representation — reads verify `canonicalize(document_json) = canonical_json`.
 
 ## Immutability and amendments
 
@@ -58,11 +60,25 @@ A filed DR **never changes**. The only way to revise or complete one is to file 
 | `digestDecisionRecordContent(document)` | the canonical SHA-256-hex digest |
 | `fileDecisionRecord({ document, filedBy, year? })` | mint id, stamp `schema_version`, validate, emit one `decision_record.filed`, insert — atomic; request captured before the first `await`, advisory lock first |
 | `fileDecisionRecordAmendment({ amendsDrId, document, filedBy, year? })` | a new linked DR + `decision_record.amended` |
-| `getDecisionRecord(id)` | load + **integrity-verify** (recompute digest vs stored, JSONB vs canonical); returns a frozen document or throws on corruption |
+| `getDecisionRecord(id)` | the **trust boundary** — full re-verification before anything is returned (below); returns a **deep-frozen** document or throws on corruption |
 | `getAmendmentsOf(id)` | the amendment chain |
 | `renderDecisionBrief(record)` | deterministic ≤2-page markdown brief (§8.2) |
 
-**Field-level validation** (beyond the schema): unique `option_id`s; `chosen_option` must resolve; **R3/R4 ⇒ ≥2 options**; **R2+ ⇒ non-blank kill criteria and rollback plan** (Part VII §2.2 — this is why a standing G-17/G-18 DR, being R3, now carries kill criteria even though the gate registry does not itself demand them); no whitespace-only required strings; an amendment cannot reference itself. **Gate-specific** requirements (which gate, `status: approved`, reversibility-vs-gate, kill-mandatory-per-registry) remain in `gates.ts`; the gate registry is **not** duplicated in `dr.ts`.
+**Field-level validation** (beyond the schema): unique `option_id`s; `chosen_option` must resolve; **R3/R4 ⇒ ≥2 options, each with a non-empty `predicted_outcome_distribution`** (an option with no distribution — or an empty `{}` — carries no predictive information; the field stays structurally optional so R1/R2 DRs remain filable without it), **and ≥1 non-blank risk** (the §8.2 brief must surface top risks — a material decision can never render "No risks recorded"); **R2+ ⇒ non-blank kill criteria and rollback plan** (Part VII §2.2 — this is why a standing G-17/G-18 DR, being R3, now carries kill criteria even though the gate registry does not itself demand them); no whitespace-only required strings; an amendment cannot reference itself. **Gate-specific** requirements (which gate, `status: approved`, reversibility-vs-gate, kill-mandatory-per-registry) remain in `gates.ts`; the gate registry is **not** duplicated in `dr.ts`.
+
+## Reading is a trust boundary
+
+`getDecisionRecord` returns a row only after **all** of:
+
+1. `content_digest` is a well-formed SHA-256 hex string **and** equals a fresh recomputation over the stored canonical bytes;
+2. the canonical bytes round-trip (they really are canonical) and the JSONB projection canonicalizes to exactly the same string;
+3. the parsed document **still passes `validateDecisionRecord`** (schema + Part VII semantics) — an archived document that no longer validates is corruption, and the error carries the field-level errors;
+4. column↔document bindings hold: `document.id === row.id`, `document.schema_version === row.schema_version`, `document.amends_dr_id ?? null === row.amends_dr_id`;
+5. the **filing event semantically represents this filing** — it exists, its type is `decision_record.filed` (or `.amended` when `amends_dr_id` is set), its `object_type`/`object_id`/`actor_id` match the row, and its payload's `content_digest`/`schema_version`/`amends_dr_id` match the row. A mere FK to *some* event is not evidence.
+
+Any mismatch throws a specific corruption error — corruption is rejected, never returned. Tests materialize each corruption (schema-invalid document, every column↔document mismatch, wrong-type / wrong-object / wrong-digest filing events) by direct insert and assert both the DB backstop and the read layer reject them; gate passes reject the same rows because they load through `getDecisionRecord`.
+
+The returned document is **deep-frozen** (a recursive `deepFreeze`: objects, arrays, objects nested in arrays, and `predicted_outcome_distribution` included) — `document.title = …`, `options.push(…)`, `options[0].summary = …`, and `dissent_record[0].argument = …` all throw under ESM strict mode, and tests confirm the canonical bytes and digest are unchanged after the attempts.
 
 ## Integration with the gate system (issue #9)
 
@@ -70,13 +86,13 @@ The public gate functions (`passG01CreateVenture`, `passPipelineGate`, `passStan
 
 ## The decision brief (Part VII §8.2)
 
-`renderDecisionBrief(record)` produces deterministic markdown in the exact order: **1** the ask (one sentence + reversibility + gate + envelope delta when present), **2** options table (chosen marked, uncertainty shown, no invented scores), **3** top three risks (rest pointed to, not hidden), **4** dissent **verbatim**, **5** kill criteria + rollback, **6** drill-down (id + digest + evidence + amend link). See [`docs/templates/dr-template.md`](templates/dr-template.md) for the shape and a rendered example.
+`renderDecisionBrief(record)` produces deterministic markdown in the exact order: **1** the ask (one sentence + reversibility + gate + envelope delta when present), **2** options table (chosen marked, uncertainty shown, no invented scores — and always real for R3/R4, whose options cannot be filed without a distribution), **3** top three risks, each stating its mitigation **or its absence flatly** — the Phase 0 DR keeps `risks: string[]` with no separate mitigation field, so every shown risk carries the explicit line *"Mitigation: not separately recorded in the Phase 0 DR."* (declared honestly, never invented; the rest are pointed to, not hidden), **4** dissent **verbatim**, **5** kill criteria + rollback, **6** drill-down (id + digest + evidence + amend link). See [`docs/templates/dr-template.md`](templates/dr-template.md) for the shape and a rendered example.
 
 **Two-page limit.** Markdown has no stable pagination, so the limit is an operational **word budget** (`DECISION_BRIEF_WORD_LIMIT = 900`, ≈ two pages). Mandatory content is **never** truncated to fit — overflow throws `DecisionBriefTooLong { words, limit }` so the caller compresses the DR itself. Dissent and risks are never dropped to make the budget.
 
 ## What it guarantees / does NOT
 
-**Guarantees:** invalid DRs are rejected with field-level errors; a filed DR is immutable (DB-enforced) and can only be revised by a linked amendment; one canonicalization/digest shared with the gate system (no second definition); reads reject corruption instead of returning dubious bytes; the brief renders every mandatory section deterministically and refuses to ship over-length rather than truncate.
+**Guarantees:** invalid DRs are rejected with field-level errors; a filed DR is immutable (DB-enforced) and can only be revised by a linked amendment; one canonicalization/digest shared with the gate system (no second definition); reads are a full trust boundary (digest, canonical bytes, JSONB, re-validation, column↔document bindings, and the filing event itself) that rejects corruption instead of returning dubious bytes, and returns deep-frozen documents; a gate pass cannot cite an unfiled DR even at the DB layer (`gate_passes.dr_id` FK); R3/R4 DRs always carry per-option uncertainty and ≥1 risk; the brief renders every mandatory section deterministically — each shown risk stating mitigation or its absence — and refuses to ship over-length rather than truncate.
 
 **Does NOT (out of scope for P0-9):** the full production DR schema (Monte-Carlo/calibration/scoring); resubmission-diff validation (a rejected DR vs a new one — still deferred); DR authenticity beyond the content hash (actor identity is recorded, not verified — see [AUTH](AUTH.md)); any dashboard/UI/API, agents, or external side effects.
 

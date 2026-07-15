@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
-import { appendEvent, verifyChainInDb } from "../src/lib/eventlog.js";
+import { appendEvent, canonicalize, verifyChainInDb } from "../src/lib/eventlog.js";
 import {
   validateDecisionRecord,
   fileDecisionRecord,
@@ -15,6 +15,7 @@ import {
   DECISION_BRIEF_WORD_LIMIT,
   type DecisionRecordInput,
 } from "../src/lib/dr.js";
+import { passPipelineGate } from "../src/lib/gates.js";
 import { setupActors, type Actors } from "./helpers.js";
 
 const DATABASE_URL =
@@ -22,6 +23,17 @@ const DATABASE_URL =
 const runId = process.env.TEST_RUN_ID ?? String(Date.now());
 let yearSeed = 2600 + (Number(runId.replace(/\D/g, "").slice(-3)) % 300);
 const freshDrYear = () => ++yearSeed;
+
+/** Pinned SHA-256 of the golden document's canonical JSON (see the golden test). */
+const GOLDEN_DIGEST = "97a35a73d40e966f200d30fef0164a145e1be5ad133c035c8dde7d41d099c46c";
+
+/**
+ * Unique DR id for RAW-inserted rows (corruption/self-amend tests). Those rows
+ * are append-only — they persist across suite runs on a reused DB — so a fixed
+ * `-1` suffix would collide with a prior run's rows. The random 6-digit seq is
+ * far above anything the per-year counter mints.
+ */
+const freshRawId = () => `DR-${freshDrYear()}-${100000 + Math.floor(Math.random() * 900000)}`;
 
 /** A schema- and Part-VII-valid DR content object (no id — filing mints it). */
 function validContent(over: Partial<DecisionRecordInput> = {}): DecisionRecordInput {
@@ -38,8 +50,25 @@ function validContent(over: Partial<DecisionRecordInput> = {}): DecisionRecordIn
     kill_criteria: ["activation < 8% after 28 days"],
     rollback_plan: "Disable the feature flag; refund any pilot customers.",
     options: [
-      { option_id: "opt-ship", summary: "Ship the MVP now." },
-      { option_id: "opt-defer", summary: "Defer one sprint." },
+      {
+        option_id: "opt-ship",
+        summary: "Ship the MVP now.",
+        predicted_outcome_distribution: {
+          primary_metric: "activated_customers_at_90d",
+          representation: "quantiles",
+          quantiles: { p05: 4, p50: 22, p95: 85 },
+          epistemic_share: 0.6,
+        },
+      },
+      {
+        option_id: "opt-defer",
+        summary: "Defer one sprint.",
+        predicted_outcome_distribution: {
+          primary_metric: "activated_customers_at_90d",
+          representation: "qualitative",
+          epistemic_share: 0.4,
+        },
+      },
     ],
     chosen_option: "opt-ship",
     dissent_record: [
@@ -149,6 +178,71 @@ describe("decision records — schema + field-level validation", () => {
     const r = validateDecisionRecord({ id: "DR-2600-7", ...validContent({ proposer: "   " }) });
     expect(r.ok).toBe(false);
     expect(r.errors.some((e) => e.path === "/proposer" && e.keyword === "non_blank")).toBe(true);
+  });
+
+  it("R3: an option with NO predicted_outcome_distribution is rejected", () => {
+    const c = validContent();
+    delete (c.options![1] as { predicted_outcome_distribution?: unknown })
+      .predicted_outcome_distribution;
+    const r = validateDecisionRecord({ id: "DR-2600-8", ...c });
+    expect(r.ok).toBe(false);
+    expect(
+      r.errors.some(
+        (e) => e.path === "/options/1/predicted_outcome_distribution" && e.keyword === "required",
+      ),
+    ).toBe(true);
+  });
+
+  it("R3: an option with an EMPTY {} predicted_outcome_distribution is rejected", () => {
+    const c = validContent();
+    c.options![0].predicted_outcome_distribution = {};
+    const r = validateDecisionRecord({ id: "DR-2600-9", ...c });
+    expect(r.ok).toBe(false);
+    expect(
+      r.errors.some(
+        (e) => e.path === "/options/0/predicted_outcome_distribution" && e.keyword === "required",
+      ),
+    ).toBe(true);
+  });
+
+  it("R2 options remain filable without a distribution (rule is R3/R4-only)", () => {
+    const c = validContent({
+      reversibility_class: "R2",
+      options: [{ option_id: "solo", summary: "Only path considered." }],
+      chosen_option: "solo",
+    });
+    const r = validateDecisionRecord({ id: "DR-2600-10", ...c });
+    expect(r.ok).toBe(true);
+  });
+
+  it("R3: zero non-blank risks are rejected (the brief must surface top risks)", () => {
+    const r = validateDecisionRecord({
+      id: "DR-2600-11",
+      ...validContent({ risks: ["   "] }),
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.path === "/risks" && e.keyword === "required")).toBe(true);
+  });
+
+  it("golden digest: the canonicalization is pinned — refactors cannot change it", () => {
+    // SHA-256 over eventlog.canonicalize (key-sorted, no whitespace) of this
+    // fixed document. If this test fails, the digest definition changed and
+    // every recorded approval binding would silently break. Do NOT update the
+    // constant without a deliberate, documented migration.
+    const golden = {
+      id: "DR-2027-0001",
+      title: "Golden digest pin",
+      proposer: "P",
+      approver: "A",
+      reversibility_class: "R1",
+      decision: "Pin the canonicalization.",
+      status: "approved",
+    };
+    expect(canonicalize(golden)).toBe(
+      '{"approver":"A","decision":"Pin the canonicalization.","id":"DR-2027-0001",' +
+        '"proposer":"P","reversibility_class":"R1","status":"approved","title":"Golden digest pin"}',
+    );
+    expect(digestDecisionRecordContent(golden as never)).toBe(GOLDEN_DIGEST);
   });
 });
 
@@ -277,13 +371,46 @@ describe("decision records — immutability (Postgres)", () => {
     ).rejects.toThrow(/append-only|restrict/i);
   });
 
-  it("TRUNCATE is rejected by the append-only trigger", async () => {
-    await expect(client.query("TRUNCATE decision_records")).rejects.toThrow(/append-only|restrict/i);
+  it("TRUNCATE is rejected (FK guard, and the append-only trigger under CASCADE)", async () => {
+    // Since the gate_passes.dr_id FK, a plain TRUNCATE is blocked even before
+    // the trigger fires (a second, independent layer of protection).
+    await expect(client.query("TRUNCATE decision_records")).rejects.toThrow(
+      /append-only|restrict|foreign key/i,
+    );
+    // CASCADE clears the FK objection — and then the append-only trigger raises.
+    await expect(client.query("TRUNCATE decision_records CASCADE")).rejects.toThrow(
+      /append-only|restrict/i,
+    );
   });
 
-  it("getDecisionRecord returns a frozen document (no in-place overwrite)", async () => {
+  it("getDecisionRecord returns a DEEP-frozen document: every mutation attempt throws", async () => {
     const rec = (await getDecisionRecord(client, filedId))!;
-    expect(Object.isFrozen(rec.document)).toBe(true);
+    const doc = rec.document;
+    // Top level, arrays, objects nested in arrays, and the nested distribution.
+    expect(() => {
+      (doc as { title: string }).title = "tampered";
+    }).toThrow(TypeError);
+    expect(() => {
+      doc.options!.push({ option_id: "opt-evil", summary: "injected" });
+    }).toThrow(TypeError);
+    expect(() => {
+      (doc.options![0] as { summary: string }).summary = "tampered";
+    }).toThrow(TypeError);
+    expect(() => {
+      (doc.options![0].predicted_outcome_distribution as Record<string, unknown>).epistemic_share = 1;
+    }).toThrow(TypeError);
+    expect(() => {
+      doc.risks!.push("injected risk");
+    }).toThrow(TypeError);
+    expect(() => {
+      (doc.dissent_record![0] as { argument: string }).argument = "tampered";
+    }).toThrow(TypeError);
+
+    // Nothing changed: a re-read returns identical canonical bytes and digest.
+    const again = (await getDecisionRecord(client, filedId))!;
+    expect(again.canonicalJson).toBe(rec.canonicalJson);
+    expect(again.digest).toBe(rec.digest);
+    expect(canonicalize(doc)).toBe(rec.canonicalJson);
   });
 });
 
@@ -347,7 +474,7 @@ describe("decision records — amendments (Postgres)", () => {
       actor_id: "P",
       event_type: "decision_record.filed",
     });
-    const id = `DR-${freshDrYear()}-1`;
+    const id = freshRawId();
     const doc = JSON.stringify({ id });
     await expect(
       client.query(
@@ -371,35 +498,229 @@ describe("decision records — corruption is rejected on read (Postgres)", () =>
     if (client) await client.end();
   });
 
-  async function insertRaw(id: string, canonicalJson: string, digest: string, documentJson: string) {
+  /** A fully valid, internally consistent document for a given row id. */
+  function fullDoc(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+    return { ...validContent(), id, schema_version: DR_SCHEMA_VERSION, amends_dr_id: null, ...over };
+  }
+
+  interface RawRowOpts {
+    id: string;
+    doc: Record<string, unknown>;
+    digest?: string;
+    documentJson?: string;
+    schemaVersion?: string;
+    amendsCol?: string | null;
+    eventType?: string;
+    eventObjectId?: string;
+    eventActor?: string;
+    eventPayload?: Record<string, unknown> | null;
+  }
+
+  /**
+   * Append the filing event for a raw row. SELF-COMMITTING (appendEvent opens
+   * its own transaction), so it must be called OUTSIDE any open transaction —
+   * calling it inside one would commit that outer transaction mid-flight.
+   */
+  async function makeFilingEvent(opts: RawRowOpts): Promise<string> {
+    const digest = opts.digest ?? digestDecisionRecordContent(opts.doc as never);
+    const schemaVersion = opts.schemaVersion ?? DR_SCHEMA_VERSION;
+    const amendsCol = opts.amendsCol ?? null;
     const ev = await appendEvent(client, {
       id: `EV-corrupt-${runId}-${Math.random().toString(36).slice(2, 8)}`,
       timestamp: new Date().toISOString(),
       actor_type: "human",
-      actor_id: "P",
-      event_type: "decision_record.filed",
+      actor_id: opts.eventActor ?? "P",
+      event_type:
+        opts.eventType ?? (amendsCol === null ? "decision_record.filed" : "decision_record.amended"),
+      object_type: "decision-record",
+      object_id: opts.eventObjectId ?? opts.id,
+      payload:
+        opts.eventPayload === undefined
+          ? { content_digest: digest, schema_version: schemaVersion, amends_dr_id: amendsCol }
+          : opts.eventPayload,
     });
+    return ev.id;
+  }
+
+  /** Plain single INSERT of the row (safe inside an open transaction). */
+  async function insertRowRaw(opts: RawRowOpts, eventId: string): Promise<void> {
+    const canonical = canonicalize(opts.doc);
     await client.query(
       `INSERT INTO decision_records
-         (id, canonical_json, document_json, content_digest, schema_version, file_event_id, filed_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'P')`,
-      [id, canonicalJson, documentJson, digest, DR_SCHEMA_VERSION, ev.id],
+         (id, canonical_json, document_json, content_digest, schema_version, amends_dr_id, file_event_id, filed_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'P')`,
+      [
+        opts.id,
+        canonical,
+        opts.documentJson ?? canonical,
+        opts.digest ?? digestDecisionRecordContent(opts.doc as never),
+        opts.schemaVersion ?? DR_SCHEMA_VERSION,
+        opts.amendsCol ?? null,
+        eventId,
+      ],
     );
   }
 
-  it("a stored digest that does not match the canonical bytes is rejected", async () => {
-    const id = `DR-${freshDrYear()}-1`;
-    const canon = JSON.stringify({ id, ok: true });
-    await insertRaw(id, canon, "0".repeat(64), canon); // digest is valid-format but wrong
-    await expect(getDecisionRecord(client, id)).rejects.toThrow(/corrupt/i);
+  /** Event + row, outside any transaction (tests-only direct insert). */
+  async function insertRaw(opts: RawRowOpts): Promise<void> {
+    const eventId = await makeFilingEvent(opts);
+    await insertRowRaw(opts, eventId);
+  }
+
+  /**
+   * Materialize a column↔document mismatch (normally unrepresentable thanks to
+   * the DB CHECK) to prove the READ layer independently rejects it: the filing
+   * event is committed FIRST (it self-commits), then a transaction drops the
+   * named constraint, inserts the row, runs `fn`, and ROLLS BACK — restoring
+   * the constraint and discarding the corrupt row. Nothing persists.
+   */
+  async function withDroppedConstraint(
+    name: string,
+    row: RawRowOpts,
+    fn: () => Promise<void>,
+  ): Promise<void> {
+    const eventId = await makeFilingEvent(row); // BEFORE the txn — self-commits
+    await client.query("BEGIN");
+    try {
+      await client.query(`ALTER TABLE decision_records DROP CONSTRAINT ${name}`);
+      await insertRowRaw(row, eventId);
+      await fn();
+    } finally {
+      await client.query("ROLLBACK");
+    }
+  }
+
+  it("1. a stored digest that does not match the canonical bytes is rejected", async () => {
+    const id = freshRawId();
+    await insertRaw({ id, doc: fullDoc(id), digest: "0".repeat(64) }); // valid format, wrong value
+    await expect(getDecisionRecord(client, id)).rejects.toThrow(/corrupt.*digest/i);
   });
 
-  it("a document_json that does not match the canonical JSON is rejected", async () => {
-    const id = `DR-${freshDrYear()}-1`;
-    const canon = JSON.stringify({ a: 1, id });
-    const digest = digestDecisionRecordContent({ a: 1, id } as never);
-    await insertRaw(id, canon, digest, JSON.stringify({ different: true })); // JSONB ≠ canonical
-    await expect(getDecisionRecord(client, id)).rejects.toThrow(/corrupt/i);
+  it("2. a document_json that does not match the canonical JSON is rejected", async () => {
+    const id = freshRawId();
+    await insertRaw({
+      id,
+      doc: fullDoc(id),
+      // Satisfies the DB binding CHECKs (same id/schema_version) but differs.
+      documentJson: JSON.stringify({ id, schema_version: DR_SCHEMA_VERSION, different: true }),
+    });
+    await expect(getDecisionRecord(client, id)).rejects.toThrow(/document_json does not match/i);
+  });
+
+  it("3. a stored document that no longer validates is rejected with its field errors", async () => {
+    const id = freshRawId();
+    // Internally consistent (bytes, digest, bindings, event) but schema-invalid:
+    // `decision` is missing.
+    await insertRaw({
+      id,
+      doc: {
+        id,
+        schema_version: DR_SCHEMA_VERSION,
+        amends_dr_id: null,
+        title: "Corrupt archived document",
+        proposer: "P",
+        reversibility_class: "R1",
+        status: "proposed",
+      },
+    });
+    await expect(getDecisionRecord(client, id)).rejects.toThrow(
+      /no longer validates.*required property 'decision'/i,
+    );
+  });
+
+  it("4. row.id ≠ document.id: unrepresentable by INSERT (DB CHECK) AND rejected on read", async () => {
+    const rowId = freshRawId();
+    const otherId = freshRawId();
+    // (a) The DB backstop makes it unrepresentable by direct INSERT.
+    await expect(insertRaw({ id: rowId, doc: fullDoc(otherId) })).rejects.toThrow(
+      /decision_records_doc_id_match|check/i,
+    );
+    // (b) Belt-and-suspenders: with the CHECK dropped (rolled back), the READ
+    // layer still rejects the mismatch.
+    await withDroppedConstraint(
+      "decision_records_doc_id_match",
+      { id: rowId, doc: fullDoc(otherId) },
+      async () => {
+        await expect(getDecisionRecord(client, rowId)).rejects.toThrow(/carries id/i);
+      },
+    );
+  });
+
+  it("5. column schema_version ≠ document: DB CHECK AND read both reject", async () => {
+    const id = freshRawId();
+    await expect(insertRaw({ id, doc: fullDoc(id), schemaVersion: "9.9.9" })).rejects.toThrow(
+      /decision_records_doc_schema_version_match|check/i,
+    );
+    await withDroppedConstraint(
+      "decision_records_doc_schema_version_match",
+      { id, doc: fullDoc(id), schemaVersion: "9.9.9" },
+      async () => {
+        await expect(getDecisionRecord(client, id)).rejects.toThrow(/schema_version/i);
+      },
+    );
+  });
+
+  it("6. column amends_dr_id ≠ document: DB CHECK AND read both reject", async () => {
+    const year = freshDrYear();
+    const target = await fileDecisionRecord(client, { document: validContent(), filedBy: "P", year });
+    const id = freshRawId();
+    // Document says null; column says it amends `target`. IS NOT DISTINCT FROM
+    // in the CHECK makes this a real FALSE (a plain `=` would be NULL and pass).
+    await expect(insertRaw({ id, doc: fullDoc(id), amendsCol: target.id })).rejects.toThrow(
+      /decision_records_doc_amends_match|check/i,
+    );
+    await withDroppedConstraint(
+      "decision_records_doc_amends_match",
+      { id, doc: fullDoc(id), amendsCol: target.id },
+      async () => {
+        await expect(getDecisionRecord(client, id)).rejects.toThrow(/amends_dr_id/i);
+      },
+    );
+  });
+
+  it("7. file_event_id pointing at an event of another type is rejected", async () => {
+    const id = freshRawId();
+    await insertRaw({ id, doc: fullDoc(id), eventType: "unit.check" });
+    await expect(getDecisionRecord(client, id)).rejects.toThrow(/filing event.*'unit\.check'/i);
+  });
+
+  it("8. a filing event whose object_id is a different DR is rejected", async () => {
+    const id = freshRawId();
+    await insertRaw({ id, doc: fullDoc(id), eventObjectId: "DR-9999-9" });
+    await expect(getDecisionRecord(client, id)).rejects.toThrow(/not this record/i);
+  });
+
+  it("9. a filing event whose payload digest differs is rejected", async () => {
+    const id = freshRawId();
+    await insertRaw({
+      id,
+      doc: fullDoc(id),
+      eventPayload: {
+        content_digest: "f".repeat(64),
+        schema_version: DR_SCHEMA_VERSION,
+        amends_dr_id: null,
+      },
+    });
+    await expect(getDecisionRecord(client, id)).rejects.toThrow(/payload digest/i);
+  });
+
+  it("gates reject corrupt records too (they load through getDecisionRecord)", async () => {
+    const id = freshRawId();
+    await insertRaw({ id, doc: fullDoc(id, { gate_id: "G-02", reversibility_class: "R2" }), eventType: "unit.check" });
+    await expect(
+      passPipelineGate(client, {
+        gateId: "G-02",
+        ventureId: "V-2099-1",
+        decisionRecordId: id,
+        approvalEventId: "EV-x",
+        actor: "op",
+      }),
+    ).rejects.toThrow(/filing event/i);
+    const { rows } = await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM gate_passes WHERE dr_id = $1",
+      [id],
+    );
+    expect(rows[0].n).toBe(0);
   });
 });
 
@@ -417,13 +738,23 @@ describe("decision records — brief renderer (Part VII §8.2)", () => {
   });
 
   it("renders the six mandatory sections in order, deterministically", async () => {
+    const content = validContent({
+      risks: ["Risk A", "Risk B"],
+      dissent_record: [
+        { author: "FIN-MODEL", position: "opt-defer", argument: "VERBATIM-DISSENT-PHRASE stands." },
+      ],
+    });
+    // An unequivocal marker INSIDE the chosen option's distribution: the
+    // uncertainty assertions below cannot be satisfied by any other part of
+    // the DR (kill criteria, decision text, etc.).
+    content.options![0].predicted_outcome_distribution = {
+      primary_metric: "UNIQUE-OPTION-METRIC",
+      representation: "quantiles",
+      quantiles: { p50: 42 },
+      epistemic_share: 0.4,
+    };
     const filed = await fileDecisionRecord(client, {
-      document: validContent({
-        risks: ["Risk A", "Risk B"],
-        dissent_record: [
-          { author: "FIN-MODEL", position: "opt-defer", argument: "VERBATIM-DISSENT-PHRASE stands." },
-        ],
-      }),
+      document: content,
       filedBy: actors.proposer,
       year: freshDrYear(),
     });
@@ -444,18 +775,36 @@ describe("decision records — brief renderer (Part VII §8.2)", () => {
     expect(idx.every((i) => i >= 0)).toBe(true);
     expect(idx).toEqual([...idx].sort((a, b) => a - b));
 
-    // Ask carries reversibility + gate. Options list the chosen option + uncertainty.
+    // Ask carries reversibility + gate.
     expect(brief).toMatch(/reversibility \*\*R3\*\*, gate \*\*G-05\*\*/);
     expect(brief).toContain("`opt-ship`");
     expect(brief).toContain("✓");
-    expect(brief).toMatch(/epistemic share|activation|quantiles|qualitative|discovery|primary/i);
+    // Uncertainty comes from the OPTION ROW specifically: the marker metric,
+    // its representation, its quantiles, and its epistemic share all appear
+    // in the options-table line for opt-ship.
+    const optionRow = brief.split("\n").find((l) => l.includes("`opt-ship`"))!;
+    expect(optionRow).toContain("UNIQUE-OPTION-METRIC");
+    expect(optionRow).toContain("(quantiles)");
+    expect(optionRow).toContain("p50=42");
+    expect(optionRow).toContain("epistemic share 0.4");
 
-    // Dissent verbatim, kill + rollback, drill-down id + digest.
+    // Risks state mitigation-or-absence flatly; dissent verbatim; kill +
+    // rollback; drill-down id + digest.
+    expect(brief).toContain("Mitigation: not separately recorded in the Phase 0 DR.");
     expect(brief).toContain("VERBATIM-DISSENT-PHRASE stands.");
     expect(brief).toContain("activation < 8% after 28 days");
     expect(brief).toContain("Disable the feature flag");
     expect(brief).toContain(`\`${filed.id}\``);
     expect(brief).toContain(`\`${filed.digest}\``);
+  });
+
+  it("filing an R3 DR with an option lacking a distribution is rejected", async () => {
+    const content = validContent();
+    delete (content.options![0] as { predicted_outcome_distribution?: unknown })
+      .predicted_outcome_distribution;
+    await expect(
+      fileDecisionRecord(client, { document: content, filedBy: actors.proposer, year: freshDrYear() }),
+    ).rejects.toThrow(/predicted_outcome_distribution/i);
   });
 
   it("surfaces at most three risks, pointing to the rest (never hiding them)", async () => {
@@ -469,6 +818,9 @@ describe("decision records — brief renderer (Part VII §8.2)", () => {
     expect(brief).toContain("R-three");
     expect(brief).toContain("…and 2 more");
     expect(brief).not.toContain("R-five");
+    // Each of the three shown risks states its mitigation absence explicitly.
+    const absences = brief.match(/Mitigation: not separately recorded in the Phase 0 DR\./g) ?? [];
+    expect(absences.length).toBe(3);
   });
 
   it("an amendment brief shows the amends link", async () => {

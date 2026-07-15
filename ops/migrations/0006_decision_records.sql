@@ -14,8 +14,8 @@
 -- atomic, and dr.ts takes the event-chain advisory lock first, so id assignment
 -- is race-free without a global sequence that could not restart per year.
 CREATE TABLE IF NOT EXISTS decision_record_counters (
-    year     INT PRIMARY KEY,
-    last_seq INT NOT NULL
+    year     INT PRIMARY KEY CHECK (year BETWEEN 1000 AND 9999),
+    last_seq INT NOT NULL CHECK (last_seq > 0)
 );
 
 CREATE TABLE IF NOT EXISTS decision_records (
@@ -34,11 +34,42 @@ CREATE TABLE IF NOT EXISTS decision_records (
     file_event_id  TEXT NOT NULL UNIQUE REFERENCES events (id),
     filed_by       TEXT NOT NULL CHECK (length(trim(filed_by)) > 0),
     filed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT decision_records_no_self_amend CHECK (amends_dr_id IS NULL OR amends_dr_id <> id)
+    CONSTRAINT decision_records_no_self_amend CHECK (amends_dr_id IS NULL OR amends_dr_id <> id),
+    -- Column <-> document binding backstops: the queryable projection can never
+    -- disagree with the row identity/version/amendment-link even by direct
+    -- INSERT (dr.ts re-checks the same bindings — plus the canonical bytes and
+    -- the filing event — at read time).
+    CONSTRAINT decision_records_doc_id_match
+        CHECK (document_json->>'id' = id),
+    CONSTRAINT decision_records_doc_schema_version_match
+        CHECK (document_json->>'schema_version' = schema_version),
+    -- IS NOT DISTINCT FROM: NULL-safe equality. A plain `=` would evaluate to
+    -- NULL when either side is NULL, and a NULL CHECK passes — silently
+    -- admitting the exact mismatch this constraint exists to reject.
+    CONSTRAINT decision_records_doc_amends_match
+        CHECK (document_json->>'amends_dr_id' IS NOT DISTINCT FROM amends_dr_id)
 );
 
 CREATE INDEX IF NOT EXISTS decision_records_amends_idx ON decision_records (amends_dr_id);
 CREATE INDEX IF NOT EXISTS decision_records_filed_at_idx ON decision_records (filed_at);
+
+-- Close the issue-#9 seam: gate_passes.dr_id was only format-checked (DRs were
+-- in-memory then). Now that DRs are filed rows, a gate pass must reference a
+-- REAL filed DR even by direct INSERT. Wrapped in a catalog check because
+-- ADD CONSTRAINT IF NOT EXISTS is not uniformly available — the migration
+-- stays idempotent on a second run.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'gate_passes_dr_id_fk'
+          AND conrelid = 'gate_passes'::regclass
+    ) THEN
+        ALTER TABLE gate_passes
+            ADD CONSTRAINT gate_passes_dr_id_fk
+            FOREIGN KEY (dr_id) REFERENCES decision_records (id);
+    END IF;
+END $$;
 
 -- Append-only is enforced by the database, not by convention (same discipline
 -- as the events table): the only permitted mutation is INSERT. UPDATE / DELETE /

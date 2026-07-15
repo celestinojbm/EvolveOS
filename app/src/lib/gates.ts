@@ -379,7 +379,9 @@ async function insertGatePassTx(
       ],
     );
   } catch (err) {
-    if (err instanceof Error && /gate_passes_dr_id|dr_id/.test(err.message)) {
+    // Match the UNIQUE constraint exactly (gate_passes_dr_id_key), not the
+    // issue-#10 FK (gate_passes_dr_id_fk): only a duplicate is "gate shopping".
+    if (err instanceof Error && /gate_passes_dr_id_key|duplicate key/.test(err.message)) {
       throw new Error(
         `no gate shopping (Appendix C mechanic 5): DR ${row.drId} has already been executed — a new pass needs a new decision record (resubmission-diff validation remains deferred beyond issue #10)`,
       );

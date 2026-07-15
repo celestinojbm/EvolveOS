@@ -21,16 +21,27 @@
 
 The chosen option is marked `✓`. Predicted outcome and uncertainty are shown
 **only** from what the DR's `predicted_outcome_distribution` actually contains —
-absent scores are never invented.
+absent scores are never invented. For **R3/R4** decisions every option MUST
+carry a non-empty `predicted_outcome_distribution` (filing rejects it
+otherwise), so this table always shows real uncertainty for material decisions;
+for R1/R2 the field is optional and an absent distribution renders as `—`.
 
 ## 3. Top three risks
 
 1. `<risk 1>`
+   - Mitigation: not separately recorded in the Phase 0 DR.
 2. `<risk 2>`
+   - Mitigation: not separately recorded in the Phase 0 DR.
 3. `<risk 3>`
+   - Mitigation: not separately recorded in the Phase 0 DR.
 - …and `<N>` more (see the full decision record).  ← only when there are > 3
 
 At most three risks are surfaced; any remainder is pointed to, never hidden.
+Part VII §8.2 requires each shown risk to state its mitigation **or its
+absence flatly** — the Phase 0 DR keeps risks as plain strings with no separate
+mitigation field, so the absence is declared explicitly and honestly, never
+invented. An R3/R4 DR cannot be filed with zero risks, so this section is never
+"No risks recorded" for a material decision.
 
 ## 4. Dissent (verbatim)
 
@@ -78,6 +89,7 @@ Proceed to Customer Discovery; validation cleared the pre-registered kill criter
 ## 3. Top three risks
 
 1. Conversion may not hold at larger spend
+   - Mitigation: not separately recorded in the Phase 0 DR.
 
 ## 4. Dissent (verbatim)
 

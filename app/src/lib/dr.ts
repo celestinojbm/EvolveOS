@@ -205,12 +205,39 @@ export function validateDecisionRecord(document: unknown): DrValidationResult {
     });
   }
 
-  if (R3_PLUS.has(dr.reversibility_class) && options.length < 2) {
-    errors.push({
-      path: "/options",
-      keyword: "min_options",
-      message: `${dr.reversibility_class} decisions require at least two options (Part VII §2.2)`,
-    });
+  if (R3_PLUS.has(dr.reversibility_class)) {
+    if (options.length < 2) {
+      errors.push({
+        path: "/options",
+        keyword: "min_options",
+        message: `${dr.reversibility_class} decisions require at least two options (Part VII §2.2)`,
+      });
+    }
+    // Uncertainty is mandatory content for R3/R4 (Part VII §8.2: the brief must
+    // show it, so the DR must contain it). An option with no
+    // predicted_outcome_distribution — or an empty {} — carries no predictive
+    // information and is rejected. The field stays structurally optional in the
+    // schema so R1/R2 documents remain filable without it.
+    for (let i = 0; i < options.length; i++) {
+      const d = options[i].predicted_outcome_distribution;
+      if (d == null || typeof d !== "object" || Object.keys(d).length === 0) {
+        errors.push({
+          path: `/options/${i}/predicted_outcome_distribution`,
+          keyword: "required",
+          message: `${dr.reversibility_class} options require a non-empty predicted_outcome_distribution (Part VII §8.2 uncertainty)`,
+        });
+      }
+    }
+    // The §8.2 brief must surface the top risks for a material decision — an
+    // R3/R4 DR with zero recorded risks would render "No risks recorded".
+    const nonBlankRisks = (dr.risks ?? []).filter((r) => !isBlank(r));
+    if (nonBlankRisks.length === 0) {
+      errors.push({
+        path: "/risks",
+        keyword: "required",
+        message: `${dr.reversibility_class} decisions require at least one non-blank risk (Part VII §8.2 top risks)`,
+      });
+    }
   }
 
   if (R2_PLUS.has(dr.reversibility_class)) {
@@ -328,6 +355,20 @@ function requireNonEmpty(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string`);
   }
   return value;
+}
+
+/**
+ * Recursively freeze a value: objects, arrays, objects nested inside arrays —
+ * every reachable layer. `Object.freeze` alone is shallow; a caller could still
+ * push into `options` or rewrite `options[0].summary`. The frozen value is
+ * plain JSON (deep-cloned from canonical bytes), so there are no cycles.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  for (const key of Object.keys(value as object)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return Object.freeze(value);
 }
 
 async function inDrTx<T>(client: Queryable, fn: () => Promise<T>): Promise<T> {
@@ -478,11 +519,26 @@ export async function fileDecisionRecordAmendment(
 }
 
 /**
- * Read a filed DR and VERIFY its integrity: recompute the digest from the
- * stored canonical bytes and check it equals `content_digest`, and check that
- * the stored JSONB canonicalizes to exactly the stored canonical JSON. Any
- * mismatch throws — corruption is rejected, never returned as if trustworthy.
- * The returned document is a frozen deep clone.
+ * Read a filed DR and VERIFY it at the trust boundary. A row is only returned
+ * after ALL of:
+ *   1. `content_digest` is a well-formed SHA-256 hex string and equals a fresh
+ *      recomputation over the stored canonical bytes;
+ *   2. the canonical bytes round-trip (they really are canonical) and the JSONB
+ *      projection canonicalizes to exactly the same string;
+ *   3. the parsed document still passes `validateDecisionRecord` (schema +
+ *      Part VII semantics) — a stored document that no longer validates is
+ *      corruption, not data;
+ *   4. column↔document bindings hold: `document.id === row.id`,
+ *      `document.schema_version === row.schema_version`,
+ *      `document.amends_dr_id ?? null === row.amends_dr_id`;
+ *   5. the filing EVENT semantically represents this row: it exists, its type
+ *      is `decision_record.filed` (or `.amended` when `amends_dr_id` is set),
+ *      `object_type`/`object_id`/`actor_id` match the row, and its payload's
+ *      `content_digest` / `schema_version` / `amends_dr_id` match the row — a
+ *      mere FK to *some* event is not evidence.
+ * Any mismatch throws a specific corruption error — corruption is rejected,
+ * never returned as if trustworthy. The returned document is a DEEP-frozen
+ * deep clone (objects, arrays, and nested objects all frozen).
  */
 export async function getDecisionRecord(
   client: Queryable,
@@ -507,14 +563,20 @@ export async function getDecisionRecord(
   if (!rows.length) return null;
   const row = rows[0];
 
+  // 1. Digest: well-formed, and the canonical bytes still hash to it.
+  if (!/^[0-9a-f]{64}$/.test(row.content_digest)) {
+    throw new Error(
+      `decision record ${id} is corrupt: content_digest is not a 64-char SHA-256 hex string`,
+    );
+  }
   const recomputed = createHash("sha256").update(row.canonical_json, "utf8").digest("hex");
   if (recomputed !== row.content_digest) {
     throw new Error(
       `decision record ${id} is corrupt: stored digest ${row.content_digest.slice(0, 12)}… does not match its canonical bytes (${recomputed.slice(0, 12)}…)`,
     );
   }
-  // The parsed canonical bytes must round-trip to themselves (stored bytes are
-  // canonical) AND the JSONB projection must canonicalize to the same string.
+  // 2. The parsed canonical bytes must round-trip to themselves (stored bytes
+  // are canonical) AND the JSONB projection must canonicalize to the same string.
   const parsed = JSON.parse(row.canonical_json) as DecisionRecordDoc;
   if (canonicalize(parsed) !== row.canonical_json) {
     throw new Error(`decision record ${id} is corrupt: stored canonical_json is not canonical`);
@@ -524,10 +586,91 @@ export async function getDecisionRecord(
       `decision record ${id} is corrupt: document_json does not match canonical_json`,
     );
   }
+  // 3. The archived document must STILL be a valid Decision Record.
+  const validation = validateDecisionRecord(parsed);
+  if (!validation.ok) {
+    throw new Error(
+      `decision record ${id} is corrupt: the stored document no longer validates: ${formatErrors(validation.errors)}`,
+    );
+  }
+  // 4. Column ↔ document bindings.
+  if (parsed.id !== row.id) {
+    throw new Error(
+      `decision record ${id} is corrupt: the stored document carries id '${parsed.id}'`,
+    );
+  }
+  if ((parsed.schema_version ?? null) !== row.schema_version) {
+    throw new Error(
+      `decision record ${id} is corrupt: document schema_version '${parsed.schema_version ?? "none"}' does not match the row's '${row.schema_version}'`,
+    );
+  }
+  if ((parsed.amends_dr_id ?? null) !== row.amends_dr_id) {
+    throw new Error(
+      `decision record ${id} is corrupt: document amends_dr_id '${parsed.amends_dr_id ?? "null"}' does not match the row's '${row.amends_dr_id ?? "null"}'`,
+    );
+  }
+  // 5. The filing event must semantically represent this filing.
+  const expectedType =
+    row.amends_dr_id === null ? "decision_record.filed" : "decision_record.amended";
+  const ev = await client.query<{
+    event_type: string;
+    actor_id: string;
+    object_type: string | null;
+    object_id: string | null;
+    payload: {
+      content_digest?: unknown;
+      schema_version?: unknown;
+      amends_dr_id?: unknown;
+    } | null;
+  }>(
+    "SELECT event_type, actor_id, object_type, object_id, payload FROM events WHERE id = $1",
+    [row.file_event_id],
+  );
+  if (!ev.rows.length) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event ${row.file_event_id} does not exist`,
+    );
+  }
+  const e = ev.rows[0];
+  if (e.event_type !== expectedType) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event ${row.file_event_id} is '${e.event_type}', expected '${expectedType}'`,
+    );
+  }
+  if (e.object_type !== "decision-record") {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event ${row.file_event_id} is for object_type '${e.object_type}', not a decision-record`,
+    );
+  }
+  if (e.object_id !== row.id) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event ${row.file_event_id} filed '${e.object_id}', not this record`,
+    );
+  }
+  if (e.actor_id !== row.filed_by) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event actor '${e.actor_id}' does not match filed_by '${row.filed_by}'`,
+    );
+  }
+  if (e.payload?.content_digest !== row.content_digest) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event payload digest does not match content_digest`,
+    );
+  }
+  if (e.payload?.schema_version !== row.schema_version) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event payload schema_version does not match the row`,
+    );
+  }
+  if ((e.payload?.amends_dr_id ?? null) !== row.amends_dr_id) {
+    throw new Error(
+      `decision record ${id} is corrupt: filing event payload amends_dr_id does not match the row`,
+    );
+  }
 
   return {
     id: row.id,
-    document: Object.freeze(parsed),
+    document: deepFreeze(parsed),
     canonicalJson: row.canonical_json,
     digest: row.content_digest,
     schemaVersion: row.schema_version,
@@ -666,7 +809,11 @@ export function renderDecisionBrief(record: {
     lines.push("");
   }
 
-  // 3. Top three risks.
+  // 3. Top three risks. §8.2 requires each shown risk to state its mitigation
+  // or its absence flatly. The Phase 0 DR keeps risks as plain strings with no
+  // separate mitigation field, so the absence is declared explicitly and
+  // honestly — never invented. (An R3/R4 DR cannot reach here with zero risks:
+  // validateDecisionRecord rejects it at filing.)
   lines.push("## 3. Top three risks", "");
   const risks = (dr.risks ?? []).filter((r) => !isBlank(r));
   if (risks.length === 0) {
@@ -674,6 +821,7 @@ export function renderDecisionBrief(record: {
   } else {
     risks.slice(0, 3).forEach((r, i) => {
       lines.push(`${i + 1}. ${r.trim()}`);
+      lines.push("   - Mitigation: not separately recorded in the Phase 0 DR.");
     });
     if (risks.length > 3) {
       lines.push(`- …and ${risks.length - 3} more (see the full decision record).`);
