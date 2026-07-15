@@ -59,6 +59,9 @@ jobs:
       - name: Gate passes have a single writer (no gate-system bypass)
         run: pnpm check:gates
 
+      - name: Decision records have a single writer (no DR-store bypass)
+        run: pnpm check:dr
+
       - name: Migrations apply to a clean DB
         run: pnpm migrate
 
