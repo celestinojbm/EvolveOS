@@ -6,9 +6,13 @@ This is the **single, signable, machine-readable** instrument that gates the `re
 
 The deeper constitutional context — the founding amendment mode (`spec/00-overview.md` §4.1), the ratification statement, MVP security deviations, and re-entry triggers — lives in [FOUNDING_RATIFICATION_PACK.md](FOUNDING_RATIFICATION_PACK.md). **This file is the operational pack the code reads and hashes.** There is no second machine-readable source of truth.
 
-> **Signatures bind the exact bytes of this file.** The `real_money` flag reads `true` only when a valid, self-signed human signature event exists for **every** required signer, each bound to the SHA-256 of this document's exact UTF-8 bytes. Editing **any** byte — a threshold, a name, a word of the non-scope, or the manifest — changes the digest and invalidates every prior signature. See [RATIFICATION.md](RATIFICATION.md) and §F below.
+> **The manifest is the source of truth.** The threshold table (§B) and the role table (§C) below are **rendered from the embedded JSON manifest** and enclosed in generated-block markers. `check:ratification` re-renders them from the manifest and fails if either table and the manifest diverge — so the human-readable tables can never drift from the machine-readable state.
 
-**This Pack is NOT ratification-ready.** Its thresholds are `UNRESOLVED` and its signers are `UNASSIGNED` (see §B, §C). Until a human founder resolves them and sets `ratification_ready: true` in the manifest, `real_money` stays `false` and no signature can be recorded.
+> **Readiness is derived, not declared.** `thresholds_resolved`, `roles_assigned`, and `ratification_ready` appear in the manifest as readable declarations, but the code recomputes them from the structured `thresholds` and `role_assignments`. If a declared boolean does not equal the computed value, the pack is invalid. Setting the booleans to `true` while a threshold is `UNRESOLVED` or a role is `UNASSIGNED` does not make the pack ready — it makes it invalid.
+
+> **Signatures bind the exact bytes of this file.** The `real_money` flag reads `true` only when a valid, self-signed, user-grounded human signature event exists for **every** required signer, each bound to the SHA-256 of this document's exact UTF-8 bytes. Editing **any** byte — a threshold, a name, a word of the non-scope, or the manifest — changes the digest and invalidates every prior signature. See [RATIFICATION.md](RATIFICATION.md) and §F below.
+
+**This Pack is NOT ratification-ready.** Its thresholds are `UNRESOLVED` and its signers are `UNASSIGNED` (see §B, §C). Until a human founder resolves them, `real_money` stays `false` and no signature can be recorded.
 
 ---
 
@@ -28,25 +32,27 @@ The deeper constitutional context — the founding amendment mode (`spec/00-over
 
 ## B. Pathfinder-scale threshold table
 
-Each row records the **original normative value** (from Part 0 §5 / Appendix C, calibrated to ~$10M deployable capital that does not exist yet) and the **value proposed for this deployment**. Where no pathfinder-scale value has been proposed in any existing document, the proposed value is **`UNRESOLVED`** — a real human founder must decide it. No economic number is invented here.
+Rendered from the manifest's `thresholds`. Each `unresolved` row is a value a real human founder must decide; no economic number is invented here. The original normative context ($10M-scale `[ASSUMPTION]` values, scope, and reversibility implication) is discussed in the prose below the block; the block itself is the machine-readable state.
 
-| ID | Concept | Original normative value | Proposed (this deployment) | Unit | Scope | Responsible | Evidence / rationale | Reversibility implication | Status |
-|---|---|---|---|---|---|---|---|---|---|
-| `THR-SPEND-EXEC` | Deployment-wide spend-execution authority | — (not a spec threshold) | **$0** | USD | whole deployment | founding signatory | MVP non-scope (`MVP_SCOPE.md` §2: "no money movement; no agent-adjacent spend before this Pack is signed"); [ADR-006](ARCHITECTURE_DECISIONS.md), [ADR-007](ARCHITECTURE_DECISIONS.md); the gate system already rejects any `requestedSpend ≠ 0`. | Zero — v1 executes no spend at all. | **PROPOSED** (supported; resolved-by-construction for v1) |
-| `THR-RERATIFY` | Re-ratification trigger | AUM change > 2× | > 2× (adopted as-is) | ratio | portfolio | Investment Committee (dormant → founding signatory) | Part 0 §5; [ADR-006](ARCHITECTURE_DECISIONS.md) revisit trigger | Forces re-signing this Pack. | **PROPOSED** (rule adopted unchanged) |
-| `THR-CAPITAL` | Deployable capital base | ~$10,000,000 `[ASSUMPTION]` | `UNRESOLVED` (pathfinder / personal-project scale) | USD | portfolio | founding signatory | Part 0 §5 `[ASSUMPTION]`; audit §6(c) ("scaled-down, personal-project scale"); no concrete pathfinder figure exists | All dollar bands scale from this. | `UNRESOLVED` |
-| `THR-R1` | R1 undo-cost ceiling | ≤ $1,000 (and ≤ 1 hour) | `UNRESOLVED` | USD | reversibility classifier | founding signatory | Part 0 §5 | Sets the R1 boundary. | `UNRESOLVED` |
-| `THR-R2` | R2 undo-cost ceiling | ≤ $50,000 (and ≤ 30 days) | `UNRESOLVED` | USD | reversibility classifier | founding signatory | Part 0 §5 | Sets the R2 boundary. | `UNRESOLVED` |
-| `THR-R3` | R3 cost band | $50,000 – $1,000,000 | `UNRESOLVED` | USD | reversibility classifier | founding signatory | Part 0 §5 | Sets the R3 band. | `UNRESOLVED` |
-| `THR-R4` | R4 irreversible / existential floor | > $1,000,000 | `UNRESOLVED` | USD | reversibility classifier | founding signatory | Part 0 §5 | Existential; R4 is never automated. | `UNRESOLVED` |
-| `THR-G01` | G-01 research budget | ≤ $2,000 | `UNRESOLVED` | USD | per venture | Portfolio Review lead | Appendix C | R1. | `UNRESOLVED` |
-| `THR-G02` | G-02 validation budget | ≤ $10,000 | `UNRESOLVED` | USD | per venture | Portfolio Review lead | Appendix C | R1/R2. | `UNRESOLVED` |
-| `THR-G03` | G-03 discovery budget | ≤ $15,000 | `UNRESOLVED` | USD | per venture | Portfolio Review lead | Appendix C | R2. | `UNRESOLVED` |
-| `THR-G04` | G-04 prototype budget | ≤ $25,000 | `UNRESOLVED` | USD | per venture | Portfolio Review lead | Appendix C | R2. | `UNRESOLVED` |
-| `THR-G05` | G-05 MVP budget | ≤ $150,000 | `UNRESOLVED` | USD | per venture | Portfolio Review lead | Appendix C | R3. | `UNRESOLVED` |
-| `THR-G06` | G-06 GTM budget | ≤ $100,000 / quarter | `UNRESOLVED` | USD/quarter | per venture | Portfolio Review lead | Appendix C | R3. | `UNRESOLVED` |
+<!-- RATIFICATION_THRESHOLDS_START -->
+| ID | Concept | Deployment value | Unit | Status |
+|---|---|---|---|---|
+| `THR-SPEND-EXEC` | Deployment-wide spend-execution authority | $0 | USD | resolved |
+| `THR-RERATIFY` | Re-ratification trigger | > 2x current AUM | ratio | resolved |
+| `THR-CAPITAL` | Deployable capital base (~$10,000,000 [ASSUMPTION]) | UNRESOLVED | USD | unresolved |
+| `THR-R1` | R1 undo-cost ceiling (orig. <= $1,000) | UNRESOLVED | USD | unresolved |
+| `THR-R2` | R2 undo-cost ceiling (orig. <= $50,000) | UNRESOLVED | USD | unresolved |
+| `THR-R3` | R3 cost band (orig. $50,000-$1,000,000) | UNRESOLVED | USD | unresolved |
+| `THR-R4` | R4 irreversible / existential floor (orig. > $1,000,000) | UNRESOLVED | USD | unresolved |
+| `THR-G01` | G-01 research budget (orig. <= $2,000) | UNRESOLVED | USD | unresolved |
+| `THR-G02` | G-02 validation budget (orig. <= $10,000) | UNRESOLVED | USD | unresolved |
+| `THR-G03` | G-03 discovery budget (orig. <= $15,000) | UNRESOLVED | USD | unresolved |
+| `THR-G04` | G-04 prototype budget (orig. <= $25,000) | UNRESOLVED | USD | unresolved |
+| `THR-G05` | G-05 MVP budget (orig. <= $150,000) | UNRESOLVED | USD | unresolved |
+| `THR-G06` | G-06 GTM budget (orig. <= $100,000/quarter) | UNRESOLVED | USD | unresolved |
+<!-- RATIFICATION_THRESHOLDS_END -->
 
-**Because rows above are `UNRESOLVED`, `thresholds_resolved` is `false`.** The Pack cannot be ratification-ready, and `real_money` cannot be enabled, until a founder replaces every `UNRESOLVED` with a concrete pathfinder value (or explicitly adopts the original as the deployment value). The `THR-SPEND-EXEC = $0` row means that even after ratification, this deployment authorizes **no** spend execution: enabling `real_money` records that ratification happened; it does **not** move money and no gate executes a payment (see §E and [GATE_SYSTEM.md](GATE_SYSTEM.md)).
+`THR-SPEND-EXEC = $0` is **resolved by construction**: this deployment authorizes no spend execution at all in v1 (`MVP_SCOPE.md` §2; [ADR-006](ARCHITECTURE_DECISIONS.md)/[ADR-007](ARCHITECTURE_DECISIONS.md)). `THR-RERATIFY` adopts the Part 0 §5 re-ratification rule (> 2× AUM) unchanged. Every remaining row is `UNRESOLVED`: no concrete pathfinder figure exists in any document, and the Buildability Audit §6(c) says only "personal-project scale" qualitatively. **Because unresolved rows exist, `thresholds_resolved` is `false`, the Pack cannot be ratification-ready, and `real_money` cannot be enabled** until a founder replaces every `UNRESOLVED` with a concrete pathfinder value (or explicitly adopts the original as the deployment value). Even after ratification, `THR-SPEND-EXEC = $0` means enabling `real_money` moves no money and no gate executes a payment (§E, [GATE_SYSTEM.md](GATE_SYSTEM.md)).
 
 > Appendix C is **not** re-thresholded here and is not edited. Re-thresholding a gate in the spec is itself a G-16 action; this Pack records deployment values only.
 
@@ -54,16 +60,18 @@ Each row records the **original normative value** (from Part 0 §5 / Appendix C,
 
 ## C. Role assignments
 
-Each constitutional role that the pathfinder deployment depends on. A real human founder must fill in the actor ID and name; until then every entry is `UNASSIGNED` and the Pack is not ratification-ready. **No person is invented here.**
+Rendered from the manifest's `role_assignments`. Every constitutional capacity the pathfinder deployment depends on is listed; a real human founder must fill in the actor ID and human name. **No person is invented here.** Every required signer must be a **distinct** registered human (see the policy note below).
 
-| Capacity | Actor ID | Human name | Responsibility | Scope | Status |
-|---|---|---|---|---|---|
-| `founding_signatory` | `UNASSIGNED` | `UNASSIGNED` | Ratify the constitutional core, the thresholds (§B), the manual G-00 procedure (§D), and the non-scope (§E); exercise the founding amendment mode. | Founding amendment mode (`spec/00-overview.md` §4.1) | `UNASSIGNED` |
-| `portfolio_review_lead` | `UNASSIGNED` | `UNASSIGNED` | Approve G-05/G-06; chair the weekly A2 batch review; the `approver` role (issue #7). | Pipeline gate approvals | `UNASSIGNED` |
-| `operator` | `UNASSIGNED` | `UNASSIGNED` | Run the console workflows and invoke agents; author opportunity briefs and DRs. May be more than one person (each a separate signer). | Console operations | `UNASSIGNED` |
-| `curator` | `UNASSIGNED` | `UNASSIGNED` | Human validation of Knowledge Items (the `CURATOR` role is a human — MVP scope §1). | Knowledge base | `UNASSIGNED` |
+<!-- RATIFICATION_ROLES_START -->
+| Capacity | Actor ID | Name | Required signer | Status |
+|---|---|---|---|---|
+| `founding_signatory` | `UNASSIGNED` | UNASSIGNED | yes | unassigned |
+| `portfolio_review_lead` | `UNASSIGNED` | UNASSIGNED | yes | unassigned |
+| `operator` | `UNASSIGNED` | UNASSIGNED | yes | unassigned |
+| `curator` | `UNASSIGNED` | UNASSIGNED | yes | unassigned |
+<!-- RATIFICATION_ROLES_END -->
 
-**Because entries above are `UNASSIGNED`, `roles_assigned` is `false`.** The same person may hold multiple capacities, but the proposer≠approver separation (Part III, issue #7) still holds per gate decision. Each distinct required signer in the manifest must be a distinct assigned human before ratification.
+**Required-signer policy.** Each required constitutional signer is a **distinct human** with a **unique actor ID**; a single person may not cover multiple required-signing capacities. This preserves real separation and prevents one signature from controlling the whole Pack. At ratification each `actor_id` must resolve to a registered user whose `display_name` equals the `Name` here, and operational capacities must hold the matching active role (`portfolio_review_lead` → `approver`; `operator` → `operator`). `founding_signatory` and `curator` have no dedicated role enum in issue #11 (documented limit) and require a registered user only. **Because entries above are `UNASSIGNED`, `roles_assigned` is `false`.**
 
 ---
 
@@ -125,16 +133,31 @@ A signature is a single, self-signed, append-only human event (`ratification.sig
   "document_status": "proposed",
   "adr_ref": "ADR-006",
   "spec_ref": "Part 0 §5",
-  "acknowledgement_version": "1.0.0",
   "acknowledgement": "I have read this Founding Ratification Pack in full and I ratify, as my own act and by my own hand, the pathfinder-scale thresholds, the role assignments, the manual G-00 procedure, and the MVP non-scope recorded in it; I acknowledge the stated risks; and I acknowledge that altering any byte of this Pack invalidates every prior signature.",
-  "ratification_ready": false,
+  "acknowledgement_version": "1.0.0",
   "thresholds_resolved": false,
   "roles_assigned": false,
-  "required_signers": [
-    { "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "capacity": "founding_signatory" },
-    { "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "capacity": "portfolio_review_lead" },
-    { "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "capacity": "operator" },
-    { "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "capacity": "curator" }
+  "ratification_ready": false,
+  "thresholds": [
+    { "id": "THR-SPEND-EXEC", "concept": "Deployment-wide spend-execution authority", "deployment_value": "$0", "unit": "USD", "status": "resolved" },
+    { "id": "THR-RERATIFY", "concept": "Re-ratification trigger", "deployment_value": "> 2x current AUM", "unit": "ratio", "status": "resolved" },
+    { "id": "THR-CAPITAL", "concept": "Deployable capital base (~$10,000,000 [ASSUMPTION])", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-R1", "concept": "R1 undo-cost ceiling (orig. <= $1,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-R2", "concept": "R2 undo-cost ceiling (orig. <= $50,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-R3", "concept": "R3 cost band (orig. $50,000-$1,000,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-R4", "concept": "R4 irreversible / existential floor (orig. > $1,000,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-G01", "concept": "G-01 research budget (orig. <= $2,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-G02", "concept": "G-02 validation budget (orig. <= $10,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-G03", "concept": "G-03 discovery budget (orig. <= $15,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-G04", "concept": "G-04 prototype budget (orig. <= $25,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-G05", "concept": "G-05 MVP budget (orig. <= $150,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
+    { "id": "THR-G06", "concept": "G-06 GTM budget (orig. <= $100,000/quarter)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" }
+  ],
+  "role_assignments": [
+    { "capacity": "founding_signatory", "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "required_signer": true, "status": "unassigned" },
+    { "capacity": "portfolio_review_lead", "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "required_signer": true, "status": "unassigned" },
+    { "capacity": "operator", "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "required_signer": true, "status": "unassigned" },
+    { "capacity": "curator", "actor_id": "UNASSIGNED", "name": "UNASSIGNED", "required_signer": true, "status": "unassigned" }
   ]
 }
 ```
@@ -144,10 +167,10 @@ A signature is a single, self-signed, append-only human event (`ratification.sig
 
 ## What a founder must resolve before this Pack can be signed
 
-1. **Thresholds (§B):** replace every `UNRESOLVED` with a concrete pathfinder value (or explicitly adopt the original as the deployment value), then set `thresholds_resolved: true`.
-2. **Roles (§C):** give every required signer a real `actor_id` and human `name` (no `UNASSIGNED`), then set `roles_assigned: true`.
+1. **Thresholds (§B):** replace every `UNRESOLVED` with a concrete pathfinder value (or explicitly adopt the original as the deployment value) and set each row's `status` to `resolved`, then set `thresholds_resolved: true`.
+2. **Roles (§C):** give every required signer a real `actor_id` and human `name` (no `UNASSIGNED`), set each `status` to `assigned`, register each as a user (with the matching `display_name` and role), then set `roles_assigned: true`.
 3. **Review §D, §E, §F** and confirm they are acceptable.
-4. Set `ratification_ready: true` in the manifest.
-5. Compute the resulting exact-byte digest and have **every** required signer record a `ratification.signature_recorded` event bound to that digest and version (via the console; never automatically).
+4. Set `document_status: "ratification-ready"` and `ratification_ready: true` in the manifest (these must match the computed readiness or the pack is invalid).
+5. Re-render the §B and §C tables from the manifest (they must match, or `check:ratification` fails), compute the resulting exact-byte digest, and have **every** required signer record a `ratification.signature_recorded` event bound to that digest and version (via the console; never automatically).
 
 Only when all required signers have signed the final bytes does `isRealMoneyEnabled` return `true` — and even then, `THR-SPEND-EXEC = $0` means no money moves in v1.
