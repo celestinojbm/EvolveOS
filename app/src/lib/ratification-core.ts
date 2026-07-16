@@ -1,31 +1,29 @@
 /**
- * EvolveOS founding-ratification CORE (issue #11, P0-10) — PURE primitives with
- * NO database and NO productive file loader. Everything here operates on bytes
- * or already-parsed structures so it can be unit-tested directly.
- *
- * The ONLY productive wrapper is app/src/lib/flags.ts, which always loads the
- * canonical docs/RATIFICATION_PACK.md and passes its exact bytes here. No other
+ * EvolveOS founding-ratification CORE (issue #11, P0-10) — the pure primitives
+ * plus the INJECTABLE database evaluators. NO productive file loader lives here:
+ * the only productive wrapper is app/src/lib/flags.ts, which always loads the
+ * canonical docs/RATIFICATION_PACK.md and passes its exact bytes in. No other
  * production file may import this module (ops/check-ratification-writer.mjs
- * enforces that) — so there is no productive API that can activate the flag from
+ * enforces that), so there is no productive API that activates the flag from
  * arbitrary bytes.
  *
- * Responsibilities:
+ * Contents:
  *   - exact-byte SHA-256 digest of the pack (NOT the DR JSON canonicalization);
  *   - strict manifest extraction (exactly one JSON block between the markers);
- *   - strict manifest validation with structured {path, keyword, message} errors;
- *   - DERIVED readiness (computeRatificationReadiness) — never trusts the
- *     declared booleans; the declared values must EQUAL the computed ones or the
- *     pack is invalid;
+ *   - strict manifest validation with structured {path, keyword, message} errors,
+ *     including the CONSTITUTIONAL INVENTORIES (required threshold ids, the
+ *     THR-SPEND-EXEC = 0 no-spend invariant, and the required capacity policy);
+ *   - DERIVED readiness (never trusts the declared booleans);
  *   - required signers DERIVED from role_assignments (one list, no divergence);
- *   - deterministic renderers for the human threshold / role tables (so a CI
- *     check can prove the Markdown tables match the manifest);
+ *   - deterministic renderers + runtime table/section binding;
  *   - full structural validation of a signature evidence event;
- *   - the INJECTABLE database evaluators (`recordSignatureForSnapshot`,
- *     `evaluateRealMoneyForSnapshot`) that take an already-parsed snapshot. These
- *     are the "injectable evaluator": flags.ts calls them with the CANONICAL
- *     snapshot; tests call them with a fixture snapshot. No other production file
- *     may import this module, so there is no productive API that activates the
- *     flag from arbitrary bytes.
+ *   - the injectable DB evaluators (`recordSignatureForSnapshot`,
+ *     `evaluateRealMoneyForSnapshot`) — signatures are bound to an active session
+ *     and the flag is evaluated inside one serialized REPEATABLE READ transaction.
+ *
+ * This module builds NO real-money mechanism. `real_money = true` records that a
+ * human ratification act happened; THR-SPEND-EXEC is pinned to 0 and no spend is
+ * ever executed here.
  */
 import { createHash, randomUUID } from "node:crypto";
 import type { Client, PoolClient } from "pg";
@@ -37,14 +35,44 @@ type Queryable = Client | PoolClient;
 export const RATIFICATION_EVENT_TYPE = "ratification.signature_recorded";
 export const RATIFICATION_OBJECT_TYPE = "founding-ratification-pack";
 
-/** Capacities a required signer may hold. Anything else is a malformed pack. */
-export const KNOWN_CAPACITIES = [
+/** Capacities a required signer may hold. Frozen at runtime. */
+export const KNOWN_CAPACITIES = Object.freeze([
   "founding_signatory",
   "portfolio_review_lead",
   "operator",
   "curator",
-] as const;
+] as const);
 export type KnownCapacity = (typeof KNOWN_CAPACITIES)[number];
+
+/** The complete, immutable inventory of pathfinder thresholds the pack must carry. */
+export const REQUIRED_THRESHOLD_IDS = Object.freeze([
+  "THR-SPEND-EXEC",
+  "THR-RERATIFY",
+  "THR-CAPITAL",
+  "THR-R1",
+  "THR-R2",
+  "THR-R3",
+  "THR-R4",
+  "THR-G01",
+  "THR-G02",
+  "THR-G03",
+  "THR-G04",
+  "THR-G05",
+  "THR-G06",
+] as const);
+
+/** The no-spend invariant identifier and its pinned deployment value. */
+export const SPEND_EXEC_ID = "THR-SPEND-EXEC";
+
+/**
+ * Constitutional capacity policy: exactly one founding_signatory / one
+ * portfolio_review_lead / one curator, and at least one operator, all as
+ * required signers. Frozen at runtime.
+ */
+export const REQUIRED_SIGNER_POLICY = Object.freeze({
+  singular: Object.freeze(["founding_signatory", "portfolio_review_lead", "curator"] as const),
+  atLeastOne: Object.freeze(["operator"] as const),
+});
 
 export const MANIFEST_START = "<!-- RATIFICATION_MANIFEST_START -->";
 export const MANIFEST_END = "<!-- RATIFICATION_MANIFEST_END -->";
@@ -52,40 +80,23 @@ export const THRESHOLDS_START = "<!-- RATIFICATION_THRESHOLDS_START -->";
 export const THRESHOLDS_END = "<!-- RATIFICATION_THRESHOLDS_END -->";
 export const ROLES_START = "<!-- RATIFICATION_ROLES_START -->";
 export const ROLES_END = "<!-- RATIFICATION_ROLES_END -->";
+export const G00_START = "<!-- RATIFICATION_G00_START -->";
+export const G00_END = "<!-- RATIFICATION_G00_END -->";
+export const NONSCOPE_START = "<!-- RATIFICATION_NONSCOPE_START -->";
+export const NONSCOPE_END = "<!-- RATIFICATION_NONSCOPE_END -->";
+export const SIGNATURE_START = "<!-- RATIFICATION_SIGNATURE_START -->";
+export const SIGNATURE_END = "<!-- RATIFICATION_SIGNATURE_END -->";
 
 const PACK_ID_RE = /^FRP-\d{4}-\d+$/;
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
-/** Any of these (case-insensitive, trimmed) marks a value as unresolved. */
-const PLACEHOLDER_TOKENS = new Set([
-  "",
-  "UNASSIGNED",
-  "UNRESOLVED",
-  "TBD",
-  "TBC",
-  "TODO",
-  "UNKNOWN",
-  "PENDING",
-  "N/A",
-  "NA",
-]);
-
+const PLACEHOLDER_TOKENS = new Set(["", "UNASSIGNED", "UNRESOLVED", "TBD", "TBC", "TODO", "UNKNOWN", "PENDING", "N/A", "NA"]);
 const ALLOWED_DOC_STATUS = ["proposed", "ratification-ready"] as const;
 type DocStatus = (typeof ALLOWED_DOC_STATUS)[number];
 
 const TOP_LEVEL_KEYS = [
-  "pack_id",
-  "version",
-  "proposed_date",
-  "document_status",
-  "adr_ref",
-  "spec_ref",
-  "acknowledgement",
-  "acknowledgement_version",
-  "thresholds",
-  "role_assignments",
-  "thresholds_resolved",
-  "roles_assigned",
-  "ratification_ready",
+  "pack_id", "version", "proposed_date", "document_status", "adr_ref", "spec_ref",
+  "acknowledgement", "acknowledgement_version", "thresholds", "role_assignments",
+  "thresholds_resolved", "roles_assigned", "ratification_ready",
 ] as const;
 const THRESHOLD_KEYS = ["id", "concept", "deployment_value", "unit", "status"] as const;
 const ROLE_KEYS = ["capacity", "actor_id", "name", "required_signer", "status"] as const;
@@ -117,7 +128,6 @@ export interface RatificationManifest {
   acknowledgement_version: string;
   thresholds: Threshold[];
   role_assignments: RoleAssignment[];
-  /** Declared readiness — MUST equal the computed value or the pack is invalid. */
   thresholds_resolved: boolean;
   roles_assigned: boolean;
   ratification_ready: boolean;
@@ -129,7 +139,6 @@ export interface RequiredSigner {
   capacity: KnownCapacity;
 }
 
-/** A structured validation error — never an opaque string. */
 export interface RatificationError {
   path: string;
   keyword: string;
@@ -141,7 +150,6 @@ export interface RatificationReadiness {
   roles_assigned: boolean;
   ratification_ready: boolean;
   required_signers: RequiredSigner[];
-  /** Human-readable reasons the pack is not ready (empty when ready). */
   reasons: string[];
 }
 
@@ -169,33 +177,55 @@ export class RatificationPackInvalid extends Error {
   }
 }
 
-// --- digest (exact bytes, NOT DR canonicalization) ---------------------------
+// --- utilities ---------------------------------------------------------------
+
+/** Recursively freeze an object/array graph (runtime immutability). */
+export function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const v of Object.values(value as Record<string, unknown>)) deepFreeze(v);
+    Object.freeze(value);
+  }
+  return value;
+}
 
 /** SHA-256 (lowercase hex) of the exact UTF-8 bytes of the document. */
 export function digestPackBytes(bytes: string): string {
   return createHash("sha256").update(Buffer.from(bytes, "utf8")).digest("hex");
 }
 
-// --- helpers -----------------------------------------------------------------
-
 function err(path: string, keyword: string, message: string): RatificationError {
   return { path, keyword, message };
 }
-
 function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
-
 function nonEmptyTrimmed(v: unknown): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
-
 function isPlaceholder(v: string | number): boolean {
   return PLACEHOLDER_TOKENS.has(String(v).trim().toUpperCase());
 }
-
 function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
+}
+
+/** Extract the exact text between a START/END marker pair (null if absent/ambiguous). */
+export function extractBetween(bytes: string, start: string, end: string): string | null {
+  if (countOccurrences(bytes, start) !== 1 || countOccurrences(bytes, end) !== 1) return null;
+  const s = bytes.indexOf(start) + start.length;
+  const e = bytes.indexOf(end);
+  if (e < s) return null;
+  return bytes.slice(s, e);
+}
+
+/** Normalize a marker-delimited block for comparison (trim lines + edges). */
+export function normalizeBlock(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/\s+$/, ""))
+    .join("\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "");
 }
 
 // --- manifest extraction (strict) --------------------------------------------
@@ -222,24 +252,22 @@ function extractManifestJson(bytes: string, errors: RatificationError[]): unknow
     return null;
   }
   const between = bytes.slice(startIdx, endIdx);
-  const fences = countOccurrences(between, "```json");
-  if (fences === 0) {
+  const jsonFences = countOccurrences(between, "```json");
+  if (jsonFences === 0) {
     errors.push(err("manifest", "missing", "no ```json fenced block between the manifest markers"));
     return null;
   }
-  if (fences > 1) {
+  if (jsonFences > 1) {
     errors.push(err("manifest", "ambiguous", "more than one ```json block between the manifest markers"));
+    return null;
+  }
+  if (countOccurrences(between, "```") !== 2) {
+    errors.push(err("manifest", "ambiguous", "unexpected fenced content between the manifest markers"));
     return null;
   }
   const fence = between.match(/```json\s*([\s\S]*?)```/);
   if (!fence) {
     errors.push(err("manifest", "malformed", "the ```json fence is not closed"));
-    return null;
-  }
-  // Reject any other fenced block in the manifest area (ambiguous content).
-  const totalFences = countOccurrences(between, "```");
-  if (totalFences !== 2) {
-    errors.push(err("manifest", "ambiguous", "unexpected fenced content between the manifest markers"));
     return null;
   }
   try {
@@ -252,12 +280,7 @@ function extractManifestJson(bytes: string, errors: RatificationError[]): unknow
 
 // --- manifest shape validation (strict) --------------------------------------
 
-function exactKeys(
-  obj: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-  errors: RatificationError[],
-): void {
+function exactKeys(obj: Record<string, unknown>, allowed: readonly string[], path: string, errors: RatificationError[]): void {
   for (const k of Object.keys(obj)) {
     if (!allowed.includes(k)) errors.push(err(`${path}.${k}`, "additionalProperties", `unknown property '${k}'`));
   }
@@ -303,13 +326,49 @@ function validateRole(raw: unknown, i: number, errors: RatificationError[]): Rol
   if (typeof raw.name !== "string" || raw.name.trim() !== raw.name || raw.name.length === 0) {
     errors.push(err(`${path}.name`, "string", "must be a trimmed non-empty string"));
   }
-  if (typeof raw.required_signer !== "boolean") {
-    errors.push(err(`${path}.required_signer`, "type", "must be a boolean"));
-  }
+  if (typeof raw.required_signer !== "boolean") errors.push(err(`${path}.required_signer`, "type", "must be a boolean"));
   if (raw.status !== "assigned" && raw.status !== "unassigned") {
     errors.push(err(`${path}.status`, "enum", "must be 'assigned' or 'unassigned'"));
   }
   return errors.some((e) => e.path.startsWith(path)) ? null : (raw as unknown as RoleAssignment);
+}
+
+/** Structural completeness of the threshold inventory + the no-spend invariant. */
+function validateThresholdInventory(thresholds: Threshold[], errors: RatificationError[]): void {
+  const ids = thresholds.map((t) => t.id);
+  for (const reqId of REQUIRED_THRESHOLD_IDS) {
+    const count = ids.filter((id) => id === reqId).length;
+    if (count === 0) errors.push(err(`thresholds.${reqId}`, "required", `required threshold '${reqId}' is missing`));
+    if (count > 1) errors.push(err(`thresholds.${reqId}`, "unique", `required threshold '${reqId}' appears ${count} times`));
+  }
+  const spend = thresholds.find((t) => t.id === SPEND_EXEC_ID);
+  if (spend) {
+    if (spend.status !== "resolved" || spend.unit !== "USD" || spend.deployment_value !== 0) {
+      errors.push(err(`thresholds.${SPEND_EXEC_ID}`, "invariant", "no-spend invariant: THR-SPEND-EXEC must be resolved, unit USD, deployment_value 0"));
+    }
+  }
+}
+
+/** Structural completeness of the constitutional capacity inventory. */
+function validateCapacityInventory(roles: RoleAssignment[], errors: RatificationError[]): void {
+  const requiredByCapacity = new Map<string, number>();
+  for (const r of roles) {
+    if (r.required_signer) requiredByCapacity.set(r.capacity, (requiredByCapacity.get(r.capacity) ?? 0) + 1);
+    // A constitutional capacity may not be demoted out of the required set.
+    if ((KNOWN_CAPACITIES as readonly string[]).includes(r.capacity) && r.required_signer === false) {
+      errors.push(err(`role_assignments.${r.capacity}`, "required_signer", `constitutional capacity '${r.capacity}' must be a required signer`));
+    }
+  }
+  for (const cap of REQUIRED_SIGNER_POLICY.singular) {
+    const n = requiredByCapacity.get(cap) ?? 0;
+    if (n === 0) errors.push(err(`role_assignments.${cap}`, "required", `exactly one required '${cap}' is mandatory (found 0)`));
+    if (n > 1) errors.push(err(`role_assignments.${cap}`, "unique", `exactly one required '${cap}' is allowed (found ${n})`));
+  }
+  for (const cap of REQUIRED_SIGNER_POLICY.atLeastOne) {
+    if ((requiredByCapacity.get(cap) ?? 0) < 1) {
+      errors.push(err(`role_assignments.${cap}`, "required", `at least one required '${cap}' is mandatory`));
+    }
+  }
 }
 
 function validateManifestShape(raw: unknown, errors: RatificationError[]): RatificationManifest | null {
@@ -339,23 +398,31 @@ function validateManifestShape(raw: unknown, errors: RatificationError[]): Ratif
     if (typeof raw[k] !== "boolean") errors.push(err(k, "type", "must be a boolean"));
   }
 
+  let thresholds: Threshold[] | null = null;
   if (!Array.isArray(raw.thresholds) || raw.thresholds.length === 0) {
     errors.push(err("thresholds", "nonEmpty", "must be a non-empty array"));
   } else {
+    const validated = raw.thresholds.map((t, i) => validateThreshold(t, i, errors));
     const seen = new Set<string>();
-    raw.thresholds.forEach((t, i) => {
-      const th = validateThreshold(t, i, errors);
-      if (th) {
-        if (seen.has(th.id)) errors.push(err(`thresholds[${i}].id`, "unique", `duplicate threshold id '${th.id}'`));
-        seen.add(th.id);
-      }
+    validated.forEach((t, i) => {
+      if (t && seen.has(t.id)) errors.push(err(`thresholds[${i}].id`, "unique", `duplicate threshold id '${t.id}'`));
+      if (t) seen.add(t.id);
     });
+    if (validated.every((t): t is Threshold => t !== null)) {
+      thresholds = validated;
+      validateThresholdInventory(thresholds, errors);
+    }
   }
 
+  let roles: RoleAssignment[] | null = null;
   if (!Array.isArray(raw.role_assignments) || raw.role_assignments.length === 0) {
     errors.push(err("role_assignments", "nonEmpty", "must be a non-empty array"));
   } else {
-    raw.role_assignments.forEach((r, i) => validateRole(r, i, errors));
+    const validated = raw.role_assignments.map((r, i) => validateRole(r, i, errors));
+    if (validated.every((r): r is RoleAssignment => r !== null)) {
+      roles = validated;
+      validateCapacityInventory(roles, errors);
+    }
   }
 
   return errors.length ? null : (raw as unknown as RatificationManifest);
@@ -363,22 +430,15 @@ function validateManifestShape(raw: unknown, errors: RatificationError[]): Ratif
 
 // --- derived required signers + readiness ------------------------------------
 
-/** Required signers DERIVED from role_assignments — the single, non-divergent list. */
 export function deriveRequiredSigners(manifest: RatificationManifest): RequiredSigner[] {
   return manifest.role_assignments
     .filter((r) => r.required_signer === true)
     .map((r) => ({ actor_id: r.actor_id, name: r.name, capacity: r.capacity }));
 }
 
-/**
- * Compute readiness from the manifest — never trusts the declared booleans.
- * The caller compares this to the declared values; any mismatch invalidates the
- * pack.
- */
 export function computeRatificationReadiness(manifest: RatificationManifest): RatificationReadiness {
   const reasons: string[] = [];
 
-  // Thresholds: all resolved, none placeholder/empty.
   let thresholdsResolved = manifest.thresholds.length > 0;
   for (const t of manifest.thresholds) {
     if (t.status !== "resolved") {
@@ -391,25 +451,25 @@ export function computeRatificationReadiness(manifest: RatificationManifest): Ra
     }
   }
 
-  // Roles: every required signer assigned + valid; distinct human actor ids.
+  // Every assignment must be assigned; required signers must be distinct humans.
+  let rolesAssigned = manifest.role_assignments.length > 0;
   const required = manifest.role_assignments.filter((r) => r.required_signer === true);
-  let rolesAssigned = required.length > 0;
-  if (required.length === 0) reasons.push("no required signers declared");
-  const actorIds = new Set<string>();
-  for (const r of required) {
+  if (required.length === 0) {
+    rolesAssigned = false;
+    reasons.push("no required signers declared");
+  }
+  for (const r of manifest.role_assignments) {
     if (r.status !== "assigned") {
       rolesAssigned = false;
-      reasons.push(`required signer for '${r.capacity}' is ${r.status}`);
+      reasons.push(`role assignment for '${r.capacity}' is ${r.status}`);
     }
     if (isPlaceholder(r.actor_id) || isPlaceholder(r.name)) {
       rolesAssigned = false;
-      reasons.push(`required signer for '${r.capacity}' has a placeholder actor_id/name`);
+      reasons.push(`role assignment for '${r.capacity}' has a placeholder actor_id/name`);
     }
-    if (!(KNOWN_CAPACITIES as readonly string[]).includes(r.capacity)) {
-      rolesAssigned = false;
-      reasons.push(`required signer capacity '${r.capacity}' is unknown`);
-    }
-    // Policy: each required constitutional signer is a DISTINCT human.
+  }
+  const actorIds = new Set<string>();
+  for (const r of required) {
     if (actorIds.has(r.actor_id)) {
       rolesAssigned = false;
       reasons.push(`required signer actor_id '${r.actor_id}' is repeated`);
@@ -430,13 +490,12 @@ export function computeRatificationReadiness(manifest: RatificationManifest): Ra
   };
 }
 
-// --- deterministic renderers (single source of truth for the human tables) ---
+// --- deterministic renderers + runtime binding -------------------------------
 
 function cell(v: string | number): string {
   return String(v).replace(/\|/g, "\\|");
 }
 
-/** Deterministic Markdown for the threshold table — must match the document. */
 export function renderThresholdsTable(manifest: RatificationManifest): string {
   const header = "| ID | Concept | Deployment value | Unit | Status |\n|---|---|---|---|---|";
   const rows = manifest.thresholds.map(
@@ -445,39 +504,14 @@ export function renderThresholdsTable(manifest: RatificationManifest): string {
   return [header, ...rows].join("\n");
 }
 
-/** Deterministic Markdown for the role-assignment table — must match the document. */
 export function renderRolesTable(manifest: RatificationManifest): string {
   const header = "| Capacity | Actor ID | Name | Required signer | Status |\n|---|---|---|---|---|";
   const rows = manifest.role_assignments.map(
-    (r) =>
-      `| \`${cell(r.capacity)}\` | \`${cell(r.actor_id)}\` | ${cell(r.name)} | ${r.required_signer ? "yes" : "no"} | ${cell(r.status)} |`,
+    (r) => `| \`${cell(r.capacity)}\` | \`${cell(r.actor_id)}\` | ${cell(r.name)} | ${r.required_signer ? "yes" : "no"} | ${cell(r.status)} |`,
   );
   return [header, ...rows].join("\n");
 }
 
-/** Normalize a marker-delimited block for comparison (trim lines + edges). */
-export function normalizeBlock(text: string): string {
-  return text
-    .split("\n")
-    .map((l) => l.replace(/\s+$/, ""))
-    .join("\n")
-    .replace(/^\n+/, "")
-    .replace(/\n+$/, "");
-}
-
-/** Extract the exact text between a START/END marker pair (null if absent/ambiguous). */
-export function extractBetween(bytes: string, start: string, end: string): string | null {
-  if (countOccurrences(bytes, start) !== 1 || countOccurrences(bytes, end) !== 1) return null;
-  const s = bytes.indexOf(start) + start.length;
-  const e = bytes.indexOf(end);
-  if (e < s) return null;
-  return bytes.slice(s, e);
-}
-
-/**
- * Verify the rendered manifest tables match the delimited Markdown blocks.
- * Returns reasons for any divergence (empty = consistent). Used by the CI check.
- */
 export function verifyRenderedTables(snapshot: RatificationPackSnapshot): string[] {
   const problems: string[] = [];
   const checks: Array<[string, string, string, string]> = [
@@ -487,24 +521,93 @@ export function verifyRenderedTables(snapshot: RatificationPackSnapshot): string
   for (const [label, start, end, expected] of checks) {
     const actual = extractBetween(snapshot.bytes, start, end);
     if (actual === null) {
-      problems.push(`${label} block missing or duplicated (${start} / ${end})`);
+      problems.push(`${label} block missing or duplicated`);
       continue;
     }
-    if (normalizeBlock(actual) !== normalizeBlock(expected)) {
-      problems.push(`${label} table does not match the manifest`);
-    }
+    if (normalizeBlock(actual) !== normalizeBlock(expected)) problems.push(`${label} table does not match the manifest`);
   }
   return problems;
 }
 
-// --- the injectable parser (bytes → snapshot) --------------------------------
+// --- constitutional sections -------------------------------------------------
+
+interface SectionSpec {
+  label: string;
+  start: string;
+  end: string;
+  clauses: Array<{ name: string; re: RegExp }>;
+}
+
+const SECTION_SPECS: SectionSpec[] = [
+  {
+    label: "G-00",
+    start: G00_START,
+    end: G00_END,
+    clauses: [
+      { name: "who may stop", re: /who may invoke a stop|any single authorized human/i },
+      { name: "reason optional", re: /reason is optional/i },
+      { name: "restart by approver", re: /restart is authorized only by[\s\S]*approver|restart[\s\S]*approver/i },
+      { name: "non-empty restart rationale", re: /non-empty rationale/i },
+      { name: "technical enforcement is issue #12", re: /issue #12/i },
+    ],
+  },
+  {
+    label: "non-scope",
+    start: NONSCOPE_START,
+    end: NONSCOPE_END,
+    clauses: [
+      { name: "zero spend execution", re: /no spend execution/i },
+      { name: "no external agent credentials", re: /external agent credentials/i },
+      { name: "no R4 autonomy", re: /R4/ },
+      { name: "no technical G-00 in this issue", re: /no technical G-00 stop mechanism/i },
+    ],
+  },
+  {
+    label: "signature statement",
+    start: SIGNATURE_START,
+    end: SIGNATURE_END,
+    clauses: [
+      { name: "thresholds", re: /threshold/i },
+      { name: "roles", re: /role/i },
+      { name: "G-00", re: /G-00/i },
+      { name: "non-scope", re: /non-scope/i },
+      { name: "risks", re: /risk/i },
+      { name: "byte-change invalidation", re: /invalidates every prior signature/i },
+    ],
+  },
+];
+
+/** Every constitutional section must appear exactly once, non-empty, with its clauses. */
+export function validateConstitutionalSections(bytes: string, errors: RatificationError[]): void {
+  for (const spec of SECTION_SPECS) {
+    if (countOccurrences(bytes, spec.start) !== 1 || countOccurrences(bytes, spec.end) !== 1) {
+      errors.push(err(`section.${spec.label}`, "cardinality", `the ${spec.label} block must appear exactly once`));
+      continue;
+    }
+    const body = extractBetween(bytes, spec.start, spec.end);
+    if (body === null) {
+      errors.push(err(`section.${spec.label}`, "order", `the ${spec.label} block markers are out of order`));
+      continue;
+    }
+    if (body.trim().length === 0) {
+      errors.push(err(`section.${spec.label}`, "empty", `the ${spec.label} block is empty`));
+      continue;
+    }
+    for (const clause of spec.clauses) {
+      if (!clause.re.test(body)) {
+        errors.push(err(`section.${spec.label}`, "clause", `the ${spec.label} block is missing the '${clause.name}' clause`));
+      }
+    }
+  }
+}
+
+// --- the injectable parser (bytes → frozen snapshot) -------------------------
 
 /**
- * Parse + fully validate pack BYTES. This is the injectable core: flags.ts calls
- * it with the canonical file's bytes; tests call it with fixture bytes. It never
- * throws. It enforces that the DECLARED readiness booleans equal the COMPUTED
- * readiness and that document_status is consistent — any lie invalidates the
- * pack.
+ * Parse + fully validate pack BYTES: manifest shape + inventories, derived
+ * readiness (declared must equal computed), document_status consistency, the
+ * runtime table binding, and the constitutional sections. Returns a DEEP-FROZEN
+ * snapshot or `{ snapshot: null, errors }`. Never throws.
  */
 export function parseRatificationPackBytes(bytes: string): RatificationPackResult {
   const errors: RatificationError[] = [];
@@ -527,38 +630,44 @@ export function parseRatificationPackBytes(bytes: string): RatificationPackResul
   if (manifest.document_status !== expectedStatus) {
     errors.push(err("document_status", "inconsistent", `must be '${expectedStatus}' for the computed readiness`));
   }
+
+  validateConstitutionalSections(bytes, errors);
   if (errors.length) return { snapshot: null, errors };
 
-  return {
-    snapshot: {
-      bytes,
-      digest: digestPackBytes(bytes),
-      manifest,
-      packId: manifest.pack_id,
-      version: manifest.version,
-      requiredSigners: computed.required_signers,
-      ready: computed.ratification_ready,
-    },
-    errors: [],
+  const snapshot: RatificationPackSnapshot = {
+    bytes,
+    digest: digestPackBytes(bytes),
+    manifest,
+    packId: manifest.pack_id,
+    version: manifest.version,
+    requiredSigners: computed.required_signers,
+    ready: computed.ratification_ready,
   };
+  // Runtime table binding: fail closed if the human tables drift from the manifest.
+  const tableProblems = verifyRenderedTables(snapshot);
+  if (tableProblems.length) {
+    return { snapshot: null, errors: tableProblems.map((p) => err("tables", "drift", p)) };
+  }
+  return { snapshot: deepFreeze(snapshot), errors: [] };
 }
 
 // --- signature evidence validation -------------------------------------------
 
-/** A stored/forged event as loaded from the log (untyped payload). */
 export interface CandidateEvent {
   event_type?: unknown;
   actor_type?: unknown;
   actor_id?: unknown;
   object_type?: unknown;
   object_id?: unknown;
+  timestamp?: unknown;
   payload?: unknown;
 }
 
 /**
  * Full structural check that `event` is a valid signature by `signer` on the
- * `snapshot`'s exact digest + version + acknowledgement version. Every field is
- * type-checked before comparison, so a malformed or forged event can never pass.
+ * snapshot's exact digest/version/capacity/acknowledgement. Every field is
+ * type-checked before comparison, and `payload.session_id` must be a non-empty
+ * string (session binding is verified separately against the DB).
  */
 export function validateRatificationSignatureEvent(
   event: CandidateEvent,
@@ -577,6 +686,7 @@ export function validateRatificationSignatureEvent(
   if (p.signer_actor_id !== signer.actor_id) return false;
   if (p.signer_capacity !== signer.capacity) return false;
   if (p.acknowledgement_version !== snapshot.manifest.acknowledgement_version) return false;
+  if (typeof p.session_id !== "string" || p.session_id.length === 0) return false;
   return true;
 }
 
@@ -588,6 +698,8 @@ export interface RecordSignatureInput {
   signerActorId: string;
   signerCapacity: string;
   acknowledgement: string;
+  /** The signer's active session id (Phase 0 session auth — opaque, not an IdP). */
+  sessionId: string;
 }
 
 function requireField(value: unknown, label: string): string {
@@ -615,14 +727,8 @@ async function inRatificationTx<T>(client: Queryable, fn: () => Promise<T>): Pro
  * or null when it holds. `founding_signatory` / `curator` have no role enum yet
  * (documented limit for issue #11): they require a registered user only.
  */
-export async function signerGroundingReason(
-  client: Queryable,
-  signer: RequiredSigner,
-): Promise<string | null> {
-  const { rows } = await client.query<{ display_name: string }>(
-    "SELECT display_name FROM users WHERE id = $1",
-    [signer.actor_id],
-  );
+export async function signerGroundingReason(client: Queryable, signer: RequiredSigner): Promise<string | null> {
+  const { rows } = await client.query<{ display_name: string }>("SELECT display_name FROM users WHERE id = $1", [signer.actor_id]);
   if (rows.length === 0) return `signer '${signer.actor_id}' is not a registered user`;
   if (rows[0].display_name !== signer.name) {
     return `signer '${signer.actor_id}' name mismatch: registered '${rows[0].display_name}', pack '${signer.name}'`;
@@ -637,14 +743,38 @@ export async function signerGroundingReason(
 }
 
 /**
- * Record one human signature against an already-parsed snapshot. INJECTABLE:
- * flags.ts passes the canonical snapshot; tests pass a fixture snapshot. Captures
- * the request before the first await, verifies the pack is ready and that the
- * pack id / digest / capacity / acknowledgement match, then inside the
- * transaction (after the advisory lock) grounds the signer to a registered user
- * + role and emits exactly one append-only `ratification.signature_recorded`
- * event. Idempotent on the FULL evidence; two concurrent signatures collapse to
- * one.
+ * The signature is a human act ATTRIBUTED TO an active registered session — not a
+ * cryptographic personal signature (Phase 0: opaque session, no IdP, no personal
+ * key). A historic signature stays valid after its session closes, as long as the
+ * session belonged to the signer and was active at the event's timestamp.
+ */
+async function sessionValidAtEvent(
+  client: Queryable,
+  sessionId: unknown,
+  signerActorId: string,
+  eventTimestamp: unknown,
+): Promise<boolean> {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return false;
+  if (typeof eventTimestamp !== "string" || eventTimestamp.length === 0) return false;
+  const { rows } = await client.query(
+    `SELECT 1 FROM sessions
+       WHERE id = $1 AND user_id = $2
+         AND started_at <= $3::timestamptz
+         AND (ended_at IS NULL OR ended_at >= $3::timestamptz)
+       LIMIT 1`,
+    [sessionId, signerActorId, eventTimestamp],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Record one human signature against an already-parsed snapshot. INJECTABLE.
+ * Captures the request before the first await, verifies the snapshot is ready and
+ * the pack id / digest / capacity / acknowledgement match, then inside the
+ * transaction (after the advisory lock) grounds the signer to a registered user +
+ * role AND to an ACTIVE session they own, then emits exactly one append-only
+ * `ratification.signature_recorded` event (payload includes `session_id`).
+ * Idempotent on the full evidence; two concurrent signatures collapse to one.
  */
 export async function recordSignatureForSnapshot(
   client: Queryable,
@@ -657,14 +787,13 @@ export async function recordSignatureForSnapshot(
     signerActorId: requireField(input.signerActorId, "signerActorId"),
     signerCapacity: requireField(input.signerCapacity, "signerCapacity"),
     acknowledgement: requireField(input.acknowledgement, "acknowledgement"),
+    sessionId: requireField(input.sessionId, "sessionId"),
   });
 
   if (!snapshot.ready) {
     throw new RatificationPackInvalid([{ path: "ratification_ready", keyword: "not-ready", message: "pack is not ratification-ready" }]);
   }
-  if (req.packId !== snapshot.packId) {
-    throw new Error(`pack id mismatch: signing '${req.packId}', current pack is '${snapshot.packId}'`);
-  }
+  if (req.packId !== snapshot.packId) throw new Error(`pack id mismatch: signing '${req.packId}', current pack is '${snapshot.packId}'`);
   if (req.expectedDigest !== snapshot.digest) {
     throw new Error(`stale pack digest: signer expects ${req.expectedDigest.slice(0, 12)}, current pack is ${snapshot.digest.slice(0, 12)}`);
   }
@@ -683,8 +812,17 @@ export async function recordSignatureForSnapshot(
     const grounding = await signerGroundingReason(client, signer);
     if (grounding) throw new Error(`signer not grounded: ${grounding}`);
 
+    // The signer must present an ACTIVE session they own.
+    const sess = await client.query<{ user_id: string; ended_at: Date | null }>(
+      "SELECT user_id, ended_at FROM sessions WHERE id = $1",
+      [req.sessionId],
+    );
+    if (sess.rows.length === 0) throw new Error(`signing session '${req.sessionId}' does not exist`);
+    if (sess.rows[0].user_id !== req.signerActorId) throw new Error(`signing session '${req.sessionId}' belongs to a different user`);
+    if (sess.rows[0].ended_at !== null) throw new Error(`signing session '${req.sessionId}' is already ended`);
+
     const candidates = await client.query<CandidateEvent & { id: string }>(
-      `SELECT id, event_type, actor_type, actor_id, object_type, object_id, payload FROM events
+      `SELECT id, event_type, actor_type, actor_id, object_type, object_id, timestamp, payload FROM events
         WHERE event_type = $1 AND object_type = $2 AND object_id = $3 AND actor_type = 'human' AND actor_id = $4`,
       [RATIFICATION_EVENT_TYPE, RATIFICATION_OBJECT_TYPE, req.packId, req.signerActorId],
     );
@@ -705,6 +843,7 @@ export async function recordSignatureForSnapshot(
         signer_actor_id: signer.actor_id,
         signer_capacity: signer.capacity,
         acknowledgement_version: snapshot.manifest.acknowledgement_version,
+        session_id: req.sessionId,
       },
     });
     return { eventId: ev.id, idempotent: false };
@@ -712,24 +851,45 @@ export async function recordSignatureForSnapshot(
 }
 
 /**
- * Evaluate `real_money` against an already-parsed snapshot. INJECTABLE. True
- * only when the snapshot is ratification-ready AND every required signer has a
- * valid signature event bound to the CURRENT digest/version/capacity AND is
- * still grounded to a registered user + role. Fails closed on any doubt.
+ * Evaluate `real_money` against an already-parsed snapshot. INJECTABLE. Runs in
+ * ONE serialized REPEATABLE READ transaction (advisory lock first) so it never
+ * mixes states read at different instants and is totally ordered against role
+ * grants/revokes, signature recording, and session start/end. True only when the
+ * snapshot is ready AND every required signer has a valid signature event bound
+ * to the CURRENT digest/version/capacity, made from a session they owned that was
+ * active at the event's timestamp, AND is still grounded to a registered user +
+ * role. Fails closed; never returns true from a partial state.
  */
-export async function evaluateRealMoneyForSnapshot(
-  client: Queryable,
-  snapshot: RatificationPackSnapshot,
-): Promise<boolean> {
+export async function evaluateRealMoneyForSnapshot(client: Queryable, snapshot: RatificationPackSnapshot): Promise<boolean> {
   if (!snapshot.ready) return false;
-  const { rows } = await client.query<CandidateEvent>(
-    `SELECT event_type, actor_type, actor_id, object_type, object_id, payload FROM events
-       WHERE event_type = $1 AND object_type = $2 AND object_id = $3 AND actor_type = 'human'`,
-    [RATIFICATION_EVENT_TYPE, RATIFICATION_OBJECT_TYPE, snapshot.packId],
-  );
-  for (const signer of snapshot.requiredSigners) {
-    if (!rows.some((r) => validateRatificationSignatureEvent(r, signer, snapshot))) return false;
-    if (await signerGroundingReason(client, signer)) return false;
+  await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+  try {
+    await acquireEventChainLock(client); // serialize against every audited mutation
+    const { rows } = await client.query<CandidateEvent>(
+      `SELECT event_type, actor_type, actor_id, object_type, object_id, timestamp, payload FROM events
+         WHERE event_type = $1 AND object_type = $2 AND object_id = $3 AND actor_type = 'human'`,
+      [RATIFICATION_EVENT_TYPE, RATIFICATION_OBJECT_TYPE, snapshot.packId],
+    );
+    let ok = true;
+    for (const signer of snapshot.requiredSigners) {
+      let signed = false;
+      for (const r of rows) {
+        if (!validateRatificationSignatureEvent(r, signer, snapshot)) continue;
+        const sessionId = isObject(r.payload) ? r.payload.session_id : undefined;
+        if (await sessionValidAtEvent(client, sessionId, signer.actor_id, r.timestamp)) {
+          signed = true;
+          break;
+        }
+      }
+      if (!signed || (await signerGroundingReason(client, signer))) {
+        ok = false;
+        break;
+      }
+    }
+    await client.query("COMMIT");
+    return ok;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
   }
-  return true;
 }

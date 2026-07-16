@@ -37,7 +37,7 @@ Rendered from the manifest's `thresholds`. Each `unresolved` row is a value a re
 <!-- RATIFICATION_THRESHOLDS_START -->
 | ID | Concept | Deployment value | Unit | Status |
 |---|---|---|---|---|
-| `THR-SPEND-EXEC` | Deployment-wide spend-execution authority | $0 | USD | resolved |
+| `THR-SPEND-EXEC` | Deployment-wide spend-execution authority | 0 | USD | resolved |
 | `THR-RERATIFY` | Re-ratification trigger | > 2x current AUM | ratio | resolved |
 | `THR-CAPITAL` | Deployable capital base (~$10,000,000 [ASSUMPTION]) | UNRESOLVED | USD | unresolved |
 | `THR-R1` | R1 undo-cost ceiling (orig. <= $1,000) | UNRESOLVED | USD | unresolved |
@@ -77,6 +77,7 @@ Rendered from the manifest's `role_assignments`. Every constitutional capacity t
 
 ## D. Manual G-00 procedure (documentary only — pre issue #12)
 
+<!-- RATIFICATION_G00_START -->
 This is the **manual** procedure that governs an emergency stop until the technical mechanism is built in issue **#12**. It is **documentary only**: there is no code enforcement here, `gates.ts` is not blocked, and there is no `stop.ts`. It mirrors Appendix C (G-00, mechanic 6 "Stop asymmetry") and Revision XV-1 without exceeding them.
 
 1. **Who may invoke a stop.** Any single authorized human (Portfolio Review lead, an operator, or the founding signatory). Stopping never needs a quorum.
@@ -90,11 +91,13 @@ This is the **manual** procedure that governs an emergency stop until the techni
 9. **Restart requires a non-empty rationale**, recorded.
 10. **Restart must be recorded** (who restarted, when, why).
 11. **No automatic technical enforcement yet.** There is no flag, no `stop.ts`, no `gates.ts` block in this issue. The automatic mechanism is issue #12.
+<!-- RATIFICATION_G00_END -->
 
 ---
 
 ## E. MVP non-scope (binding)
 
+<!-- RATIFICATION_NONSCOPE_START -->
 The Phase 0 non-scope is binding under this Pack. It is copied and reconciled from `MVP_SCOPE.md` §2, the mandatory-human decisions, and [ADR-006](ARCHITECTURE_DECISIONS.md)/[ADR-007](ARCHITECTURE_DECISIONS.md). Nothing new is invented as a constitutional restriction.
 
 - **No financial execution before ratification** — and, under `THR-SPEND-EXEC = $0`, no spend execution at all in v1. No treasury, payments, or money movement; no agent-adjacent spend. Enabling `real_money` records ratification; it does not move money.
@@ -106,11 +109,13 @@ The Phase 0 non-scope is binding under this Pack. It is copied and reconciled fr
 - **No multi-venture, no portfolio/capital allocation, no self-evolution, no consensus/calibration machinery, no cells/Kafka/SPIFFE/OPA/vector store.**
 - **No customer PII** (PC-2/PC-3 data classes banned in v1).
 - **No dashboard/UI beyond the minimal console** the MVP needs.
+<!-- RATIFICATION_NONSCOPE_END -->
 
 ---
 
 ## F. Signature statement
 
+<!-- RATIFICATION_SIGNATURE_START -->
 Each signer accepts, verbatim, the acknowledgement recorded in the manifest (`acknowledgement`). By signing, the signer affirms, as their own act and by their own hand:
 
 - the pathfinder-scale **thresholds** (§B);
@@ -121,6 +126,7 @@ Each signer accepts, verbatim, the acknowledgement recorded in the manifest (`ac
 - an **acknowledgement that altering any byte of this Pack invalidates every prior signature**.
 
 A signature is a single, self-signed, append-only human event (`ratification.signature_recorded`, `actor_type: human`, `actor_id` = the signer) bound to this Pack's exact-byte digest and version. No delegated, automated, agent, env-var, seed, or config-flag signature is ever valid.
+<!-- RATIFICATION_SIGNATURE_END -->
 
 ---
 
@@ -139,7 +145,7 @@ A signature is a single, self-signed, append-only human event (`ratification.sig
   "roles_assigned": false,
   "ratification_ready": false,
   "thresholds": [
-    { "id": "THR-SPEND-EXEC", "concept": "Deployment-wide spend-execution authority", "deployment_value": "$0", "unit": "USD", "status": "resolved" },
+    { "id": "THR-SPEND-EXEC", "concept": "Deployment-wide spend-execution authority", "deployment_value": 0, "unit": "USD", "status": "resolved" },
     { "id": "THR-RERATIFY", "concept": "Re-ratification trigger", "deployment_value": "> 2x current AUM", "unit": "ratio", "status": "resolved" },
     { "id": "THR-CAPITAL", "concept": "Deployable capital base (~$10,000,000 [ASSUMPTION])", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },
     { "id": "THR-R1", "concept": "R1 undo-cost ceiling (orig. <= $1,000)", "deployment_value": "UNRESOLVED", "unit": "USD", "status": "unresolved" },

@@ -21,7 +21,18 @@ The manifest carries **structured** state, not just three booleans:
 - The **required signers are derived** from `role_assignments` where `required_signer: true`. There is no second signer list to diverge.
 - `thresholds_resolved`, `roles_assigned`, `ratification_ready` are readable **declarations** — but the code **recomputes** them (`computeRatificationReadiness`) and rejects the pack if any declared value differs from the computed one. Flipping a boolean to `true` while a threshold is `UNRESOLVED` does not make the pack ready; it makes it **invalid**.
 
-Readiness is computed, never trusted: every threshold present, unique, `resolved`, and free of placeholders (`UNRESOLVED`/`TBD`/`TODO`/`UNKNOWN`/empty); every required signer `assigned` with a valid actor id and name, a known capacity, and a **distinct** actor (one person may not cover multiple required-signing capacities); and a complete acknowledgement. The §B/§C Markdown tables are rendered from the manifest and `check:ratification` fails if either the manifest or a table is edited without the other.
+Readiness is computed, never trusted: every threshold present, unique, `resolved`, and free of placeholders (`UNRESOLVED`/`TBD`/`TODO`/`UNKNOWN`/empty); every role assignment `assigned` with a valid actor id and name, a known capacity, and every required signer a **distinct** actor (one person may not cover multiple required-signing capacities); and a complete acknowledgement.
+
+## Constitutional inventories, invariants, and sections
+
+Beyond readiness, the pack must be **constitutionally complete** — these are structural invalidities (not just "not ready"), so a lie or omission makes the whole pack invalid:
+
+- **Threshold inventory.** The manifest must carry every id in `REQUIRED_THRESHOLD_IDS` (the 13 pathfinder thresholds) exactly once. A missing or duplicated required threshold is invalid. Extra thresholds are allowed but must also be `resolved` for the pack to be ready. You cannot make an incomplete pack ready by deleting `unresolved` rows.
+- **No-spend invariant.** `THR-SPEND-EXEC` is pinned: `status: "resolved"`, `unit: "USD"`, and the canonical value `deployment_value: 0`. A pack with a non-zero (or non-canonical, e.g. `"$0"`/`"0"`) spend-execution value is **invalid**, not merely not-ready. Enabling `real_money` never authorizes spend.
+- **Capacity inventory.** Exactly one required `founding_signatory`, one `portfolio_review_lead`, one `curator`, and at least one `operator` (operators may be several, each a distinct actor id). A constitutional capacity may not be removed, duplicated (the singular ones), or marked `required_signer: false`.
+- **Constitutional sections.** The manual G-00 procedure, the MVP non-scope, and the signature statement are wrapped in unique `RATIFICATION_*_START/END` markers. Each must appear exactly once, be non-empty, and contain its mandatory clauses (e.g. G-00 must name who may stop, that a reason is optional, restart-by-approver, a non-empty restart rationale, and that technical enforcement is issue #12; the non-scope must state zero spend execution, no external agent credentials, no R4 autonomy, and no technical G-00 here). A missing section or clause makes the pack invalid — this keeps the constitutional promises in the signed bytes, without implementing any `stop.ts`.
+
+The §B/§C Markdown tables are rendered from the manifest; `readRatificationPack()` (and `check:ratification`) **fail closed** if either the manifest or a table is edited without the other. The parsed snapshot is **deep-frozen** — thresholds, role assignments, and required signers cannot be mutated after the parse.
 
 ## Three states
 
@@ -43,9 +54,11 @@ A signature is a single, self-signed, append-only human event:
 
 - Event type `ratification.signature_recorded`, object `founding-ratification-pack`, object id = the pack id.
 - `actor_type = "human"`, `actor_id` = the signer themselves. **No delegated, automated, agent, env-var, seed, or config-flag signature is ever valid.**
-- Payload: `pack_digest`, `pack_version`, `signer_actor_id`, `signer_capacity`, `acknowledgement_version`.
+- Payload: `pack_digest`, `pack_version`, `signer_actor_id`, `signer_capacity`, `acknowledgement_version`, `session_id`.
 
-`recordRatificationSignature(client, input)` loads the **canonical** pack and verifies, before emitting anything: the pack id and digest the signer expects both match the current file; the pack is ratification-ready; the signer is a required signer with the given capacity; the acknowledgement text matches the pack's signature statement. Then, **inside the transaction** (after the advisory lock), it **grounds** the signer to a registered user: the `actor_id` must exist in `users`, the user's `display_name` must equal the manifest name, and operational capacities must hold the matching active role (`portfolio_review_lead` → `approver`; `operator` → `operator`). `founding_signatory` / `curator` require a registered user only (no dedicated role enum in issue #11 — a documented limit). It is idempotent — re-signing the same **full evidence** returns the existing event id — and two concurrent identical signatures collapse to one (serialized by the event-chain advisory lock).
+`recordRatificationSignature(client, input)` takes `{ packId, expectedDigest, signerActorId, signerCapacity, acknowledgement, sessionId }`. It loads the **canonical** pack and verifies, before emitting anything: the pack id and digest the signer expects both match the current file; the pack is ratification-ready; the signer is a required signer with the given capacity; the acknowledgement text matches the pack's signature statement. Then, **inside the transaction** (after the advisory lock), it **grounds** the signer to a registered user: the `actor_id` must exist in `users`, the user's `display_name` must equal the manifest name, and operational capacities must hold the matching active role (`portfolio_review_lead` → `approver`; `operator` → `operator`). `founding_signatory` / `curator` require a registered user only (no dedicated role enum in issue #11 — a documented limit). It also binds the signature to an **active session**: `sessionId` must exist, belong to the signer, and be open (`ended_at IS NULL`). It is idempotent — re-signing the same **full evidence** returns the existing event id — and two concurrent identical signatures collapse to one (serialized by the event-chain advisory lock).
+
+**Session binding is Phase 0 auth, not cryptography.** A signature is a human act *attributed to an active registered session* — an opaque session id, no IdP, no personal cryptographic key. `session_id` is recorded in the payload. A signature stays valid after its session closes, **provided** the session belonged to the signer and was active at the event's timestamp (`started_at ≤ event.timestamp ≤ ended_at`); a signature whose session is missing, belongs to someone else, or falls outside that window does not count.
 
 ## How the flag is evaluated
 
@@ -53,10 +66,11 @@ A signature is a single, self-signed, append-only human event:
 
 1. `RATIFICATION_PACK.md` is structurally valid and internally consistent (one manifest, strict JSON, known capacities, distinct signers, declared booleans equal to computed readiness).
 2. Computed readiness is `true` (no `UNRESOLVED` threshold, no `UNASSIGNED` role).
-3. For the pack's **current** digest and version, every required signer has a valid signature event (`validateRatificationSignatureEvent`: correct event type/object, `actor_type = "human"`, exact `actor_id`, exact digest, exact version, exact capacity, exact acknowledgement version — every field type-checked before comparison).
-4. Every required signer is **still grounded** — the user still exists, the name still matches, and the role is still active. A revoked role or a renamed/deleted user drops the flag back to `false`.
+3. For the pack's **current** digest and version, every required signer has a valid signature event (`validateRatificationSignatureEvent`: correct event type/object, `actor_type = "human"`, exact `actor_id`, exact digest, exact version, exact capacity, exact acknowledgement version, and a non-empty string `session_id` — every field type-checked before comparison).
+4. That signature's session was valid at the event's timestamp (owned by the signer, within its active window).
+5. Every required signer is **still grounded** — the user still exists, the name still matches, and the role is still active. A revoked role or a renamed/deleted user drops the flag back to `false`.
 
-Any doubt → `false`. A fresh database is always `false`.
+The whole evaluation runs inside **one serialized `REPEATABLE READ` transaction** (the event-chain advisory lock is taken first), so it never mixes states read at different instants and is totally ordered against role grants/revokes, signature recording, and session start/end. On any error it rolls back and never returns `true` from a partial state. Any doubt → `false`. A fresh database is always `false`.
 
 ## Why there is no override
 
