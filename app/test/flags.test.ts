@@ -24,6 +24,7 @@ import {
   renderRolesTable,
   verifyRenderedTables,
   validateRatificationSignatureEvent,
+  parseEventTimestamp,
   digestPackBytes,
   recordSignatureForSnapshot,
   evaluateRealMoneyForSnapshot,
@@ -55,7 +56,7 @@ import {
   snapshotRatificationPack,
   RATIFICATION_PACK_PATH,
 } from "../src/lib/flags.js";
-import { createUser, grantRole, revokeRole, startSession, endSession } from "../src/lib/auth.js";
+import { createUser, grantRole, revokeRole, startSession, endSession, hasActiveRole } from "../src/lib/auth.js";
 import { appendEvent, verifyChainInDb } from "../src/lib/eventlog.js";
 import { passPipelineGate } from "../src/lib/gates.js";
 import { setupActors, fileDR, ventureTo, type Actors } from "./helpers.js";
@@ -457,6 +458,48 @@ describe("readiness, derivation, digest, tables", () => {
   });
 });
 
+describe("parseEventTimestamp (safe timestamp parsing)", () => {
+  it.each(["not-a-date", "", "2026-13-01T00:00:00Z", "2026-02-30T00:00:00Z", "2026-07-16", "16/07/2026", "2026-07-16 00:00:00"])(
+    "rejects the malformed/ambiguous value %s",
+    (v) => expect(parseEventTimestamp(v)).toBeNull(),
+  );
+
+  it("rejects non-string inputs", () => {
+    expect(parseEventTimestamp(123)).toBeNull();
+    expect(parseEventTimestamp({})).toBeNull();
+    expect(parseEventTimestamp(null)).toBeNull();
+    expect(parseEventTimestamp(undefined)).toBeNull();
+  });
+
+  it("accepts a strict ISO instant", () => {
+    expect(parseEventTimestamp("2026-07-16T00:00:00.000Z")).toBeInstanceOf(Date);
+    expect(parseEventTimestamp("2026-07-16T00:00:00+02:00")).toBeInstanceOf(Date);
+  });
+
+  it("a malformed timestamp makes signature evidence structurally invalid (no throw)", () => {
+    const { snapshot } = buildReady("tsval");
+    const signer = snapshot.requiredSigners[0];
+    const base = {
+      event_type: RATIFICATION_EVENT_TYPE,
+      actor_type: "human",
+      actor_id: signer.actor_id,
+      object_type: RATIFICATION_OBJECT_TYPE,
+      object_id: snapshot.packId,
+      payload: {
+        pack_digest: snapshot.digest,
+        pack_version: snapshot.version,
+        signer_actor_id: signer.actor_id,
+        signer_capacity: signer.capacity,
+        acknowledgement_version: "1.0.0",
+        session_id: "s",
+      },
+    };
+    expect(validateRatificationSignatureEvent({ ...base, timestamp: "not-a-date" }, signer, snapshot)).toBe(false);
+    expect(validateRatificationSignatureEvent({ ...base, timestamp: 123 }, signer, snapshot)).toBe(false);
+    expect(validateRatificationSignatureEvent({ ...base, timestamp: "2026-07-16T00:00:00.000Z" }, signer, snapshot)).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Productive API surface (loader-only; no bytes/override).
 // ---------------------------------------------------------------------------
@@ -549,6 +592,21 @@ async function forge(
     object_id: snapshot.packId,
     payload,
   });
+}
+
+/** The event-chain advisory lock key — mirrors APPEND_LOCK_KEY in eventlog.ts. */
+const EVENT_CHAIN_LOCK_KEY = 4207001;
+
+/** Deterministically wait (no arbitrary sleep) until `pid` has a pending advisory lock. */
+async function waitForLockWaiter(observer: pg.Client, pid: number): Promise<void> {
+  for (let i = 0; i < 400; i++) {
+    const { rows } = await observer.query(
+      "SELECT 1 FROM pg_locks WHERE pid = $1 AND NOT granted AND locktype = 'advisory' LIMIT 1",
+      [pid],
+    );
+    if (rows.length) return;
+  }
+  throw new Error(`no pending advisory lock appeared for pid ${pid}`);
 }
 
 function goodPayload(snapshot: RatificationPackSnapshot, s: SignerSpec, sessionId: string): Record<string, unknown> {
@@ -730,6 +788,40 @@ describe("session-bound signatures (Postgres)", () => {
     await endSession(client, { sessionId: sessions[signers[0].actorId], userId: signers[0].actorId });
     expect(await evaluateRealMoneyForSnapshot(client, snapshot)).toBe(true);
   });
+
+  it("an event with a malformed timestamp does not count, does not block, and never throws", async () => {
+    const { snapshot, signers } = buildReady("badts");
+    const sessions = await provision(client, signers);
+    for (const s of signers.slice(1)) await sign(client, snapshot, s, sessions[s.actorId]);
+    const s0 = signers[0];
+    // events.timestamp is TEXT — a garbage instant is storable but must be ignored.
+    await forge(client, snapshot, s0, goodPayload(snapshot, s0, sessions[s0.actorId]), "not-a-date");
+    await expect(evaluateRealMoneyForSnapshot(client, snapshot)).resolves.toBe(false); // no throw
+    await sign(client, snapshot, s0, sessions[s0.actorId]);
+    expect(await evaluateRealMoneyForSnapshot(client, snapshot)).toBe(true);
+  });
+
+  it("idempotency ignores forged events with invalid sessions and never blocks the real signature", async () => {
+    const { snapshot, signers } = buildReady("idemsess");
+    const sessions = await provision(client, signers);
+    for (const s of signers.slice(1)) await sign(client, snapshot, s, sessions[s.actorId]);
+    const s0 = signers[0];
+    const sid = sessions[s0.actorId];
+    // Four structurally-correct events for s0, each with an INVALID session/time.
+    await forge(client, snapshot, s0, { ...goodPayload(snapshot, s0, sid), session_id: `nope-${runId}` }); // nonexistent
+    await forge(client, snapshot, s0, { ...goodPayload(snapshot, s0, sid), session_id: sessions[signers[1].actorId] }); // other user's
+    await forge(client, snapshot, s0, goodPayload(snapshot, s0, sid), "2000-01-01T00:00:00.000Z"); // before started_at
+    await forge(client, snapshot, s0, goodPayload(snapshot, s0, sid), "not-a-date"); // invalid timestamp
+    expect(await evaluateRealMoneyForSnapshot(client, snapshot)).toBe(false);
+    // The real signature is a NEW event (forged ones did not make it look idempotent).
+    const r1 = await sign(client, snapshot, s0, sid);
+    expect(r1.idempotent).toBe(false);
+    expect(await evaluateRealMoneyForSnapshot(client, snapshot)).toBe(true);
+    // Re-signing the same valid evidence is now idempotent.
+    const r2 = await sign(client, snapshot, s0, sid);
+    expect(r2.idempotent).toBe(true);
+    expect(r2.eventId).toBe(r1.eventId);
+  });
 });
 
 describe("user grounding (Postgres)", () => {
@@ -854,15 +946,19 @@ describe("productive loader — drift fails closed (Postgres)", () => {
 describe("concurrency + serialized evaluation (Postgres)", () => {
   let a: pg.Client;
   let b: pg.Client;
+  let c3: pg.Client; // an observer, used only to watch pg_locks deterministically
   beforeAll(async () => {
     a = new pg.Client({ connectionString: DATABASE_URL });
     b = new pg.Client({ connectionString: DATABASE_URL });
+    c3 = new pg.Client({ connectionString: DATABASE_URL });
     await a.connect();
     await b.connect();
+    await c3.connect();
   });
   afterAll(async () => {
     if (a) await a.end();
     if (b) await b.end();
+    if (c3) await c3.end();
   });
 
   it("two concurrent signatures by the same signer collapse to one event", async () => {
@@ -887,13 +983,49 @@ describe("concurrency + serialized evaluation (Postgres)", () => {
     expect((await verifyChainInDb(a)).ok).toBe(true);
   });
 
-  it("evaluation vs revocation is totally ordered: revoke-then-evaluate → false", async () => {
-    const { snapshot, signers } = buildReady("cc-eval");
+  it("evaluation waiting on the lock observes a revocation that committed first → false", async () => {
+    const { snapshot, signers } = buildReady("race-wait");
     const sessions = await provision(a, signers);
     await signAll(a, snapshot, signers, sessions);
     expect(await evaluateRealMoneyForSnapshot(a, snapshot)).toBe(true);
-    // Effective revocation (committed) before evaluation → false, never a partial true.
-    await revokeRole(b, { userId: signers[2].actorId, role: "operator", revokedBy: "admin" });
+    const op = signers.find((s) => s.capacity === "operator")!;
+    const aPid = (await a.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+
+    // B takes the event-chain advisory lock and stages the revocation (uncommitted).
+    await b.query("BEGIN");
+    await b.query("SELECT pg_advisory_xact_lock($1)", [EVENT_CHAIN_LOCK_KEY]);
+    await b.query("UPDATE role_grants SET revoked_at = now() WHERE user_id = $1 AND role = 'operator' AND revoked_at IS NULL", [op.actorId]);
+
+    // A begins evaluating; it BEGINs and blocks acquiring the SAME lock.
+    const evalP = evaluateRealMoneyForSnapshot(a, snapshot);
+    await waitForLockWaiter(c3, aPid); // deterministic: A is now blocked on the lock
+    await b.query("COMMIT"); // the revocation commits and releases the lock
+
+    // A acquires the lock AFTER the revoke committed, so (READ COMMITTED) it sees it.
+    expect(await evalP).toBe(false);
+  });
+
+  it("while evaluation holds the lock a revoke waits; the in-flight read sees prior state; a later eval sees the revoke", async () => {
+    const { snapshot, signers } = buildReady("race-hold");
+    const sessions = await provision(a, signers);
+    await signAll(a, snapshot, signers, sessions);
+    const op = signers.find((s) => s.capacity === "operator")!;
+    const bPid = (await b.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+
+    // A holds the event-chain lock, mimicking an in-flight evaluation.
+    await a.query("BEGIN");
+    await a.query("SELECT pg_advisory_xact_lock($1)", [EVENT_CHAIN_LOCK_KEY]);
+
+    // B tries to revoke via the real path; it blocks acquiring the same lock.
+    const revokeP = revokeRole(b, { userId: op.actorId, role: "operator", revokedBy: "admin" });
+    await waitForLockWaiter(c3, bPid);
+
+    // The read in flight (under A's lock) still sees the prior, un-revoked state.
+    expect(await hasActiveRole(a, op.actorId, "operator")).toBe(true);
+    await a.query("COMMIT"); // release the lock
+    await revokeP; // B's revocation now completes
+
+    // A subsequent evaluation reflects the committed revoke.
     expect(await evaluateRealMoneyForSnapshot(a, snapshot)).toBe(false);
   });
 });

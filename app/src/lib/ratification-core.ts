@@ -663,11 +663,47 @@ export interface CandidateEvent {
   payload?: unknown;
 }
 
+const ISO_DATETIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Parse an event timestamp SAFELY. Returns a `Date` only for a non-empty string
+ * in strict ISO-8601 / RFC3339 date-time form whose calendar fields are REAL
+ * (no silent roll-over like 2026-02-30 → Mar 2) and that resolves to a finite
+ * instant; everything else (empty, number, object, malformed, impossible date,
+ * ambiguous format) returns null. Untrusted event text is validated here and
+ * passed to Postgres as a `Date` parameter — never interpolated as
+ * `$n::timestamptz`.
+ */
+export function parseEventTimestamp(value: unknown): Date | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const m = ISO_DATETIME_RE.exec(value);
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3], hh = +m[4], mm = +m[5], ss = +m[6];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || hh > 23 || mm > 59 || ss > 59) return null;
+  // Reject impossible calendar dates (V8 would roll them over otherwise).
+  const cal = new Date(Date.UTC(y, mo - 1, d, hh, mm, ss));
+  if (
+    cal.getUTCFullYear() !== y ||
+    cal.getUTCMonth() !== mo - 1 ||
+    cal.getUTCDate() !== d ||
+    cal.getUTCHours() !== hh ||
+    cal.getUTCMinutes() !== mm ||
+    cal.getUTCSeconds() !== ss
+  ) {
+    return null;
+  }
+  const instant = new Date(value);
+  return Number.isFinite(instant.getTime()) ? instant : null;
+}
+
 /**
  * Full structural check that `event` is a valid signature by `signer` on the
  * snapshot's exact digest/version/capacity/acknowledgement. Every field is
- * type-checked before comparison, and `payload.session_id` must be a non-empty
- * string (session binding is verified separately against the DB).
+ * type-checked before comparison; `payload.session_id` must be a non-empty
+ * string and `event.timestamp` a valid ISO instant (session/time binding is
+ * verified separately against the DB by `signatureEvidenceIsFullyValid`). A
+ * malformed timestamp makes the evidence invalid — it never raises.
  */
 export function validateRatificationSignatureEvent(
   event: CandidateEvent,
@@ -679,6 +715,7 @@ export function validateRatificationSignatureEvent(
   if (event.actor_id !== signer.actor_id) return false;
   if (event.object_type !== RATIFICATION_OBJECT_TYPE) return false;
   if (event.object_id !== snapshot.packId) return false;
+  if (parseEventTimestamp(event.timestamp) === null) return false;
   const p = event.payload;
   if (!isObject(p)) return false;
   if (p.pack_digest !== snapshot.digest) return false;
@@ -752,19 +789,42 @@ async function sessionValidAtEvent(
   client: Queryable,
   sessionId: unknown,
   signerActorId: string,
-  eventTimestamp: unknown,
+  when: Date,
 ): Promise<boolean> {
   if (typeof sessionId !== "string" || sessionId.length === 0) return false;
-  if (typeof eventTimestamp !== "string" || eventTimestamp.length === 0) return false;
+  // `when` is a validated Date bound as a parameter — no untrusted ::timestamptz cast.
   const { rows } = await client.query(
     `SELECT 1 FROM sessions
        WHERE id = $1 AND user_id = $2
-         AND started_at <= $3::timestamptz
-         AND (ended_at IS NULL OR ended_at >= $3::timestamptz)
+         AND started_at <= $3
+         AND (ended_at IS NULL OR ended_at >= $3)
        LIMIT 1`,
-    [sessionId, signerActorId, eventTimestamp],
+    [sessionId, signerActorId, when],
   );
   return rows.length > 0;
+}
+
+/**
+ * The single source of truth for "does this event count as a signature by
+ * `signer`". Combines the pure structural check with the historical session
+ * binding: the event's timestamp must be a valid instant, and its `session_id`
+ * must name a session the signer owned that was active at that instant. Used by
+ * BOTH the idempotency search and the flag evaluation, so a structurally correct
+ * event whose session is missing/foreign/out-of-window/invalid-time can neither
+ * count nor block the real signature. Only malformed EVENT data is treated as
+ * invalid here; genuine SQL/connection errors propagate.
+ */
+export async function signatureEvidenceIsFullyValid(
+  client: Queryable,
+  event: CandidateEvent,
+  signer: RequiredSigner,
+  snapshot: RatificationPackSnapshot,
+): Promise<boolean> {
+  if (!validateRatificationSignatureEvent(event, signer, snapshot)) return false;
+  const when = parseEventTimestamp(event.timestamp);
+  if (when === null) return false;
+  const sessionId = isObject(event.payload) ? event.payload.session_id : undefined;
+  return sessionValidAtEvent(client, sessionId, signer.actor_id, when);
 }
 
 /**
@@ -821,13 +881,20 @@ export async function recordSignatureForSnapshot(
     if (sess.rows[0].user_id !== req.signerActorId) throw new Error(`signing session '${req.sessionId}' belongs to a different user`);
     if (sess.rows[0].ended_at !== null) throw new Error(`signing session '${req.sessionId}' is already ended`);
 
+    // Idempotency reduces candidates by actor/object in SQL, but the final
+    // decision uses the FULL historical evidence (structure + session validity) —
+    // a prior event with a bad/foreign/out-of-window session must not be treated
+    // as an existing signature.
     const candidates = await client.query<CandidateEvent & { id: string }>(
       `SELECT id, event_type, actor_type, actor_id, object_type, object_id, timestamp, payload FROM events
         WHERE event_type = $1 AND object_type = $2 AND object_id = $3 AND actor_type = 'human' AND actor_id = $4`,
       [RATIFICATION_EVENT_TYPE, RATIFICATION_OBJECT_TYPE, req.packId, req.signerActorId],
     );
-    const prior = candidates.rows.find((row) => validateRatificationSignatureEvent(row, signer, snapshot));
-    if (prior) return { eventId: prior.id, idempotent: true };
+    for (const row of candidates.rows) {
+      if (await signatureEvidenceIsFullyValid(client, row, signer, snapshot)) {
+        return { eventId: row.id, idempotent: true };
+      }
+    }
 
     const ev = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
@@ -851,45 +918,44 @@ export async function recordSignatureForSnapshot(
 }
 
 /**
- * Evaluate `real_money` against an already-parsed snapshot. INJECTABLE. Runs in
- * ONE serialized REPEATABLE READ transaction (advisory lock first) so it never
- * mixes states read at different instants and is totally ordered against role
- * grants/revokes, signature recording, and session start/end. True only when the
- * snapshot is ready AND every required signer has a valid signature event bound
- * to the CURRENT digest/version/capacity, made from a session they owned that was
- * active at the event's timestamp, AND is still grounded to a registered user +
- * role. Fails closed; never returns true from a partial state.
+ * Evaluate `real_money` against an already-parsed snapshot. INJECTABLE.
+ *
+ * Concurrency model — READ COMMITTED + advisory-lock-FIRST (via `inRatificationTx`),
+ * deliberately NOT `REPEATABLE READ`. Under `REPEATABLE READ`, the transaction
+ * snapshot is fixed at the FIRST statement; if that first statement is the
+ * `pg_advisory_xact_lock` call, the data snapshot can be pinned to an instant
+ * BEFORE the lock is actually granted — so a revocation that committed while we
+ * waited for the lock would be invisible (a stale-snapshot true). With the
+ * default READ COMMITTED, we take the same event-chain advisory lock FIRST; every
+ * audited mutation (role grant/revoke, signature recording, session start/end)
+ * takes that same lock, so none can interleave while we hold it, and each of our
+ * subsequent statements sees the state committed AFTER the lock was granted. No
+ * stale snapshot, full mutual exclusion.
+ *
+ * True only when the snapshot is ready AND every required signer has FULLY VALID
+ * signature evidence (structure + a session they owned that was active at the
+ * event's timestamp) AND is still grounded to a registered user + role. Fails
+ * closed; malformed event data is treated as invalid evidence, but genuine SQL /
+ * connection errors propagate — it never returns true from a partial state.
  */
 export async function evaluateRealMoneyForSnapshot(client: Queryable, snapshot: RatificationPackSnapshot): Promise<boolean> {
   if (!snapshot.ready) return false;
-  await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
-  try {
-    await acquireEventChainLock(client); // serialize against every audited mutation
+  return inRatificationTx(client, async () => {
     const { rows } = await client.query<CandidateEvent>(
       `SELECT event_type, actor_type, actor_id, object_type, object_id, timestamp, payload FROM events
          WHERE event_type = $1 AND object_type = $2 AND object_id = $3 AND actor_type = 'human'`,
       [RATIFICATION_EVENT_TYPE, RATIFICATION_OBJECT_TYPE, snapshot.packId],
     );
-    let ok = true;
     for (const signer of snapshot.requiredSigners) {
       let signed = false;
       for (const r of rows) {
-        if (!validateRatificationSignatureEvent(r, signer, snapshot)) continue;
-        const sessionId = isObject(r.payload) ? r.payload.session_id : undefined;
-        if (await sessionValidAtEvent(client, sessionId, signer.actor_id, r.timestamp)) {
+        if (await signatureEvidenceIsFullyValid(client, r, signer, snapshot)) {
           signed = true;
           break;
         }
       }
-      if (!signed || (await signerGroundingReason(client, signer))) {
-        ok = false;
-        break;
-      }
+      if (!signed || (await signerGroundingReason(client, signer))) return false;
     }
-    await client.query("COMMIT");
-    return ok;
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  }
+    return true;
+  });
 }
