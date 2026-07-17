@@ -54,6 +54,7 @@ import { randomUUID } from "node:crypto";
 import type { Client, PoolClient } from "pg";
 import { appendEventTx, acquireEventChainLock } from "./eventlog.js";
 import { hasActiveRole } from "./auth.js";
+import { assertSystemRunning } from "./stop.js";
 import { getDecisionRecord, type DecisionRecordDoc } from "./dr.js";
 import {
   TRANSITIONS,
@@ -343,6 +344,12 @@ async function runGateTx<T>(client: Queryable, fn: () => Promise<T>): Promise<T>
   await client.query("BEGIN");
   try {
     await acquireEventChainLock(client); // lock order: advisory FIRST, then rows
+    // G-00 central guard (issue #12): every gate pass flows through here. The
+    // check runs AFTER the lock and BEFORE any DR load, event, or projection —
+    // while stopped, no gate_passed event, no transition, no venture, no partial
+    // effect. A stop that committed before us is visible; one queued behind us
+    // waits (total order via the advisory lock).
+    await assertSystemRunning(client);
     const result = await fn();
     await client.query("COMMIT");
     return result;
