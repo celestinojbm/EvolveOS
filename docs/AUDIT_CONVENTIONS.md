@@ -8,7 +8,14 @@ This document is the **event taxonomy** of Phase 0: every event type the product
 
 ## L0 is the source of truth
 
-The append-only `events` table is **L0** — the ground truth of what happened. Every queryable projection (users and roles, ventures, gate passes, decision records, the system-stop state) is a *derived view* that can be rebuilt from L0; none of them is authoritative on its own. An audit therefore reads L0, not the projections: the projections are convenience, the event log is the record.
+The append-only `events` table is **L0** — the authoritative record of the *facts and references* that were actually emitted, and the audit trail an audit reads from (not the projections). The verifier proves the **integrity** (hash chain) and **conformance** (conventions + invariants) of those events.
+
+What L0 does **not** do in Phase 0 is store a full copy of every projection. Some projections keep material content that its event references by **ID / digest** but does not replicate in full:
+
+- the complete Decision Record document lives in `decision_records`; its `decision_record.filed` / `.amended` event stores the `content_digest`, `schema_version`, and amendment reference — not the document body. (The store re-verifies the digest against the bytes, so the event still binds the content cryptographically.)
+- certain venture attributes (name, checklist, current row state) live in the `ventures` projection; a `gate_passed` event records the transition, gate, DR digest, and venture id — not the full venture record.
+
+So L0 is the **normative** audit trail — every material fact is either in the event or bound to it by a digest — but Phase 0 does **not** yet implement full projection **replay**, log↔all-projections **reconciliation**, or automatic **restoration** of a projection from L0. Those are later-phase capabilities (see [honest limitations](#honest-limitations)). What Phase 0 guarantees is that the events themselves are intact and conforming, and that content held in a projection is digest-bound to its event.
 
 ## Base event format
 
@@ -47,9 +54,17 @@ hash = sha256( canonicalize({ id, timestamp, actor_type, actor_id, event_type,
 
 Event types are lowercase, dot-namespaced by domain: `user.*`, `role.*`, `auth.*`, `venture.*`, `decision_record.*`, `ratification.*`, `system.*`, and the bare `gate_passed`. A type is stable once shipped — corrections are new events, never a rename of a stored one. Every productive type is declared exactly once in the registry, emitted by exactly one owner module, and listed exactly once in the table below.
 
-## Actor attribution
+## Actor attribution and sessions
 
-`actor_type` records the *kind* of actor; `actor_id` records *which* one. In Phase 0 every productive event is `actor_type: human` — the only actors are registered humans acting through opaque sessions. **This is attribution, not a cryptographic identity:** an `actor_id` is a recorded claim bound to a session, not a signed assertion of a personal key. Closing a session never alters a historical event.
+`actor_type` records the *kind* of actor; `actor_id` records *which* one. In Phase 0 every productive event type is `actor_type: human`, and **`actor_id` is recorded attribution, not a cryptographic identity** — a claim recorded at emission, not a signed assertion of a personal key.
+
+Session evidence is not uniform across event types, and the record is honest about it:
+
+- only events whose **payload carries a `session_id`** have explicit in-record session evidence — that is `ratification.signature_recorded`, `system.stop_engaged`, and `system.stop_released`. Their owning modules validate the session **at emission time** (G-00 requires an active session the actor owns; ratification binds the signature to a session active at the event's timestamp).
+- the other event types (`user.*`, `role.*`, `auth.session_*`, `decision_record.*`, `gate_passed`, `venture.*`, `approval.recorded`) record an `actor_id` but the **event does not by itself prove an active session** — the session context existed in the calling code, not in the stored record.
+- closing a session later never alters a historical event.
+
+Accordingly the CLI validates only what is **in the record**: it checks the `session_id` fields' shape where the contract declares them, but it does **not** invent session-validity checks that are absent from the event, and it never reads the `sessions` projection (that live validation belongs to the emitting modules, at emission time).
 
 ## Object binding
 
@@ -895,7 +910,9 @@ The verifier detects any tampering with, deletion of, or reordering of an *exist
 
 - **A full re-forge by a database superuser.** Someone with DDL access can disable the append-only triggers, rewrite the entire chain tail from a chosen point (recomputing every hash), and re-enable them. The chain would then verify cleanly. Detecting this needs an **external trusted anchor** — periodically publishing the head hash somewhere append-only and outside this database — which is deliberately **not** built in this issue.
 - **Tail truncation.** Deleting the most recent rows leaves a shorter but internally consistent chain. Without a trusted external record of the expected head, a missing tail is invisible.
-- **Actor identity as cryptography.** `actor_id` is session attribution, not a signature. The log proves *what was recorded*, not that a specific human personally authorized it with a key.
+- **Actor identity as cryptography.** `actor_id` is recorded attribution, not a signature. The log proves *what was recorded*, not that a specific human personally authorized it with a key.
+- **Session evidence is per-event.** Only `session_id`-bearing events (`ratification.signature_recorded`, `system.stop_engaged`, `system.stop_released`) carry in-record session evidence, validated live by their modules at emission. For every other event type the record proves the `actor_id` claim, not an active session; the CLI does not reconstruct session validity from events.
+- **No full projection replay / reconciliation.** Phase 0 does not implement replaying L0 to rebuild every projection, reconciling the log against all projections, or auto-restoring a projection from L0. The verifier proves the events are intact and conforming and that projection-held content (e.g. the full DR body) is digest-bound to its event — not that the projections have been re-derived from the log.
 
 These are properties of the single-Postgres, single-writer Phase 0 design (ADR-002), stated plainly so no one over-trusts the tool.
 

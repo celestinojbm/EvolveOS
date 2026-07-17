@@ -921,7 +921,7 @@ function cleanEmitters(): Map<string, Set<string>> {
 }
 const DOC_MD = readFileSync(join(REPO_ROOT, "docs", "AUDIT_CONVENTIONS.md"), "utf8");
 
-describe("AST emitter analysis", () => {
+describe("AST emitter analysis (symbol-resolved, alias/namespace-proof)", () => {
   it("maps every registered type to EXACTLY its single owner module (real scan)", async () => {
     const { emitters, unresolved } = analyzeEmitters(await readProductiveSources());
     expect(unresolved).toEqual([]);
@@ -931,16 +931,17 @@ describe("AST emitter analysis", () => {
     }
   });
 
-  it("resolves a direct sink literal, a *_EVENT_TYPE constant, and a funnel-helper call", () => {
+  it("resolves a direct sink literal, a constant, and a funnel-helper call", () => {
     const { emitters, unresolved } = analyzeEmitters([
       {
         file: "app/src/lib/fixture.ts",
         text: `
+          import { appendEventTx } from "./eventlog.js";
           const RATIFICATION_EVENT_TYPE = "ratification.signature_recorded";
-          async function log(c, args) { await appendEventTx(c, { event_type: args.eventType }); }
-          export async function a(c) { await appendEventTx(c, { event_type: "gate_passed" }); }
-          export async function b(c) { await appendEventTx(c, { event_type: RATIFICATION_EVENT_TYPE }); }
-          export async function d(c) { await log(c, { eventType: "user.created" }); }
+          async function log(c: any, args: any) { await appendEventTx(c, { event_type: args.eventType }); }
+          export async function a(c: any) { await appendEventTx(c, { event_type: "gate_passed" }); }
+          export async function b(c: any) { await appendEventTx(c, { event_type: RATIFICATION_EVENT_TYPE }); }
+          export async function d(c: any) { await log(c, { eventType: "user.created" }); }
         `,
       },
     ]);
@@ -950,19 +951,61 @@ describe("AST emitter analysis", () => {
     expect(emitters.get("user.created")).toEqual(new Set(["app/src/lib/fixture.ts"]));
   });
 
-  it("does NOT count an event-type literal that is not in an emission position", () => {
+  it("detects a RENAMED import of appendEventTx (import { appendEventTx as emit })", () => {
     const { emitters } = analyzeEmitters([
-      { file: "app/src/lib/x.ts", text: `const notEmitted = { eventType: "user.created", note: "just data" };` },
+      { file: "app/src/lib/rogue.ts", text: `import { appendEventTx as emit } from "./eventlog.js"; export async function f(c: any){ await emit(c, { event_type: "rogue.event" }); }` },
     ]);
-    expect(emitters.size).toBe(0);
+    expect(emitters.get("rogue.event")).toEqual(new Set(["app/src/lib/rogue.ts"]));
   });
 
-  it("reports a dynamic / non-resolvable event_type as unresolved", () => {
+  it("detects a NAMESPACE import + property access (eventlog.appendEventTx)", () => {
+    const { emitters } = analyzeEmitters([
+      { file: "app/src/lib/rogue.ts", text: `import * as eventlog from "./eventlog.js"; export async function f(c: any){ await eventlog.appendEventTx(c, { event_type: "ns.event" }); }` },
+    ]);
+    expect(emitters.get("ns.event")).toEqual(new Set(["app/src/lib/rogue.ts"]));
+  });
+
+  it("keeps two files' same-named EVENT_TYPE constants distinct (per-symbol, not per-name)", () => {
+    const { emitters } = analyzeEmitters([
+      { file: "app/src/lib/a.ts", text: `import { appendEventTx } from "./eventlog.js"; const EVENT_TYPE = "a.type"; export async function f(c: any){ await appendEventTx(c, { event_type: EVENT_TYPE }); }` },
+      { file: "app/src/lib/b.ts", text: `import { appendEventTx } from "./eventlog.js"; const EVENT_TYPE = "b.type"; export async function g(c: any){ await appendEventTx(c, { event_type: EVENT_TYPE }); }` },
+    ]);
+    expect(emitters.get("a.type")).toEqual(new Set(["app/src/lib/a.ts"]));
+    expect(emitters.get("b.type")).toEqual(new Set(["app/src/lib/b.ts"]));
+  });
+
+  it("keeps two files' same-named funnel helpers distinct (per-symbol)", () => {
+    const funnel = `async function log(c: any, args: any){ await appendEventTx(c, { event_type: args.eventType }); }`;
+    const { emitters } = analyzeEmitters([
+      { file: "app/src/lib/a.ts", text: `import { appendEventTx } from "./eventlog.js"; ${funnel} export async function f(c: any){ await log(c, { eventType: "a.evt" }); }` },
+      { file: "app/src/lib/b.ts", text: `import { appendEventTx } from "./eventlog.js"; ${funnel} export async function g(c: any){ await log(c, { eventType: "b.evt" }); }` },
+    ]);
+    expect(emitters.get("a.evt")).toEqual(new Set(["app/src/lib/a.ts"]));
+    expect(emitters.get("b.evt")).toEqual(new Set(["app/src/lib/b.ts"]));
+  });
+
+  it("follows an ALIAS of an imported constant to its real value", () => {
+    const { emitters } = analyzeEmitters([
+      { file: "app/src/lib/consts.ts", text: `export const REAL = "aliased.type";` },
+      { file: "app/src/lib/x.ts", text: `import { appendEventTx } from "./eventlog.js"; import { REAL as RT } from "./consts.js"; export async function f(c: any){ await appendEventTx(c, { event_type: RT }); }` },
+    ]);
+    expect(emitters.get("aliased.type")).toEqual(new Set(["app/src/lib/x.ts"]));
+  });
+
+  it("reports a dynamic / non-resolvable event_type at a real sink as unresolved", () => {
     const { unresolved } = analyzeEmitters([
-      { file: "app/src/lib/x.ts", text: `export async function f(c, kind) { await appendEventTx(c, { event_type: kind + "!" }); }` },
+      { file: "app/src/lib/x.ts", text: `import { appendEventTx } from "./eventlog.js"; export async function f(c: any, kind: string){ await appendEventTx(c, { event_type: kind + "!" }); }` },
     ]);
     expect(unresolved.length).toBe(1);
     expect(unresolved[0].file).toBe("app/src/lib/x.ts");
+  });
+
+  it("does NOT count an event-type literal that never reaches a sink", () => {
+    const { emitters, unresolved } = analyzeEmitters([
+      { file: "app/src/lib/x.ts", text: `const notEmitted = { eventType: "user.created", note: "data" }; export const z = notEmitted;` },
+    ]);
+    expect(emitters.size).toBe(0);
+    expect(unresolved).toEqual([]);
   });
 });
 
