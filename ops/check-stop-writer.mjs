@@ -10,12 +10,19 @@
  *      `assertAgentInvocationAllowed`, `runGuardedAgentInvocation`,
  *      `engageSystemStop`, `releaseSystemStop`) — no second permissive flag read
  *      and no second agent-invocation boundary;
- *   4. read the stop state from an environment variable (there is no env
+ *   4. reference the CHECK-ONLY `assertAgentInvocationAllowed` at all — the only
+ *      productive boundary for a real invocation is `runGuardedAgentInvocation`
+ *      (which holds the lock across the callback). Forbidding the check-only
+ *      point read outside stop.ts prevents the TOCTOU `assertAgentInvocationAllowed(); invoke()` pattern;
+ *   5. read the stop state from an environment variable (there is no env
  *      override — the DB projection is the only source of truth).
  *
- * Other files may IMPORT and CALL stop.ts's guards (e.g. gates.ts calls
- * assertSystemRunning) — that is the whole point. Migrations create the table;
- * tests exercise it directly; docs describe it. None are scanned here.
+ * Scans app/src `.ts` and `.tsx` plus ops `.mjs`. Other files may IMPORT and CALL
+ * `assertSystemRunning` (e.g. gates.ts's central guard) — that is the whole
+ * point. This is a STATIC guard: it prevents a second writer / boundary and the
+ * check-then-invoke shape, but it does not (and does not claim to) prove that a
+ * given call site holds the lock across its callback. Migrations create the
+ * table; tests exercise it directly; docs describe it. None are scanned here.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -32,6 +39,9 @@ const STOP_EVENT_RE = /system\.stop_engaged|system\.stop_released/;
 // A DEFINITION (not an import or call) of a stop guard / mutation primitive.
 const GUARD_DEF_RE =
   /(function\s+(assertSystemRunning|assertAgentInvocationAllowed|runGuardedAgentInvocation|engageSystemStop|releaseSystemStop)\b|(assertSystemRunning|assertAgentInvocationAllowed|runGuardedAgentInvocation|engageSystemStop|releaseSystemStop)\s*=\s*(async\s*)?\()/;
+// The check-only boundary must not be referenced outside stop.ts (no TOCTOU
+// check-then-invoke): the productive boundary is runGuardedAgentInvocation.
+const CHECK_ONLY_REF_RE = /\bassertAgentInvocationAllowed\b/;
 // An environment-variable stop override anywhere in production code.
 const ENV_OVERRIDE_RE = /process\.env\.\w*(STOP|KILL|HALT|RUNNING)\w*/i;
 
@@ -56,7 +66,7 @@ async function* walk(dir) {
 const offenders = [];
 
 for await (const p of walk(join(repoRoot, "app", "src"))) {
-  if (!p.endsWith(".ts")) continue;
+  if (!p.endsWith(".ts") && !p.endsWith(".tsx")) continue;
   const rel = relative(repoRoot, p).replace(/\\/g, "/");
   const text = await readFile(p, "utf8");
   text.split("\n").forEach((line, i) => {
@@ -69,6 +79,9 @@ for await (const p of walk(join(repoRoot, "app", "src"))) {
     }
     if (rel !== OWNER && GUARD_DEF_RE.test(line)) {
       offenders.push(`${at}: stop guard/mutation re-defined outside stop.ts: ${line.trim()}`);
+    }
+    if (rel !== OWNER && CHECK_ONLY_REF_RE.test(line)) {
+      offenders.push(`${at}: check-only assertAgentInvocationAllowed used outside stop.ts (use runGuardedAgentInvocation): ${line.trim()}`);
     }
     if (ENV_OVERRIDE_RE.test(line)) {
       offenders.push(`${at}: environment-variable stop override (there is no env override): ${line.trim()}`);
