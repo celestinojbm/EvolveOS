@@ -141,6 +141,29 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
+/**
+ * Strict generation from an event PAYLOAD (JSON number): must be a real, safe,
+ * positive integer. Rejects `"1"`, `true`, `null`, `1.5`, `NaN`, `Infinity`,
+ * negatives, and anything past `Number.MAX_SAFE_INTEGER`. Returns null on any
+ * violation (the caller raises `StopStateCorruptError`).
+ */
+function parsePayloadGeneration(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) return null;
+  return value;
+}
+
+/**
+ * Strict generation from the PROJECTION `BIGINT` column (arrives as a string):
+ * a strict non-negative decimal (genesis is 0) within the safe-integer range —
+ * a value that would lose precision as a JS number is corruption, not truncated.
+ */
+function parseProjectionGeneration(value: unknown): number | null {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < 0) return null;
+  return n;
+}
+
 async function inStopTx<T>(client: Queryable, fn: () => Promise<T>): Promise<T> {
   await client.query("BEGIN");
   try {
@@ -199,7 +222,8 @@ function corrupt(message: string): never {
  */
 async function readValidatedStopState(client: Queryable): Promise<{ row: StopRow; state: SystemStopState }> {
   const row = await readStopRow(client);
-  const gen = Number(row.generation);
+  const gen = parseProjectionGeneration(row.generation);
+  if (gen === null) corrupt("the projection generation is not a safe non-negative integer");
   const latest = await latestTransition(client);
 
   if (gen === 0) {
@@ -221,30 +245,44 @@ async function readValidatedStopState(client: Queryable): Promise<{ row: StopRow
   if (!isValidTimestamp(latest.timestamp)) corrupt("the current transition has an invalid timestamp");
   const p = latest.payload;
   if (!isObject(p)) corrupt("the current transition payload is not an object");
-  if (Number(p.generation) !== gen) corrupt("payload.generation does not match the projection generation");
+  if (parsePayloadGeneration(p.generation) !== gen) corrupt("payload.generation is not a strict integer equal to the projection generation");
 
   if (row.is_stopped) {
     if (latest.event_type !== STOP_EVENT_TYPE) corrupt("stopped projection but the latest transition is not a stop");
     if ((p.reason ?? null) !== (row.reason ?? null)) corrupt("stop payload.reason does not match the projection reason");
     if (typeof p.session_id !== "string" || !p.session_id) corrupt("stop payload session_id is missing or not a string");
   } else {
-    // Restarted running (generation >= 1).
+    // Restarted running (generation >= 1): the restart must have released the
+    // transition IMMEDIATELY BEFORE it (by seq) — not merely some earlier event
+    // reachable by id.
     if (latest.event_type !== RESTART_EVENT_TYPE) corrupt("running (generation >= 1) but the latest transition is not a restart");
     if (typeof p.rationale !== "string" || !p.rationale.trim()) corrupt("restart rationale is missing/empty");
     if (p.rationale !== row.reason) corrupt("restart payload.rationale does not match the projection reason");
     if (typeof p.session_id !== "string" || !p.session_id) corrupt("restart payload session_id is missing or not a string");
     const releasedId = p.released_stop_event_id;
     if (typeof releasedId !== "string" || !releasedId) corrupt("restart released_stop_event_id is missing or not a string");
-    const rel = await client.query<{ seq: string; event_type: string; object_type: string | null; object_id: string | null; payload: Record<string, unknown> | null }>(
-      "SELECT seq, event_type, object_type, object_id, payload FROM events WHERE id = $1",
-      [releasedId],
+
+    const prevQ = await client.query<TransitionRow>(
+      `SELECT id, seq, event_type, actor_type, object_type, object_id, actor_id, timestamp, payload
+         FROM events
+        WHERE event_type IN ($1, $2) AND object_type = $3 AND object_id = $4 AND seq < $5
+        ORDER BY seq DESC
+        LIMIT 1`,
+      [STOP_EVENT_TYPE, RESTART_EVENT_TYPE, STOP_OBJECT_TYPE, STOP_OBJECT_ID, latest.seq],
     );
-    if (rel.rows.length === 0) corrupt("the released stop event does not exist");
-    const r0 = rel.rows[0];
-    if (r0.event_type !== STOP_EVENT_TYPE) corrupt("released_stop_event_id does not reference a stop event");
-    if (r0.object_type !== STOP_OBJECT_TYPE || r0.object_id !== STOP_OBJECT_ID) corrupt("the released stop event object binding is wrong");
-    if (Number(r0.seq) >= Number(latest.seq)) corrupt("the released stop does not precede the restart");
-    if (!isObject(r0.payload) || Number(r0.payload.generation) !== gen - 1) corrupt("the released stop generation is not immediately prior to the restart");
+    if (prevQ.rows.length === 0) corrupt("no transition precedes the restart");
+    const prev = prevQ.rows[0];
+    if (prev.event_type !== STOP_EVENT_TYPE) corrupt("the transition immediately before the restart is not a stop");
+    if (prev.id !== releasedId) corrupt("released_stop_event_id is not the transition immediately before the restart");
+    // Full structural evidence of the released (immediately-prior) stop.
+    if (prev.actor_type !== "human") corrupt("the released stop actor_type is not human");
+    if (typeof prev.actor_id !== "string" || !prev.actor_id) corrupt("the released stop actor_id is missing");
+    if (prev.object_type !== STOP_OBJECT_TYPE || prev.object_id !== STOP_OBJECT_ID) corrupt("the released stop object binding is wrong");
+    if (!isValidTimestamp(prev.timestamp)) corrupt("the released stop has an invalid timestamp");
+    if (!isObject(prev.payload)) corrupt("the released stop payload is not an object");
+    if (parsePayloadGeneration(prev.payload.generation) !== gen - 1) corrupt("the released stop generation is not immediately prior to the restart");
+    if (!(prev.payload.reason === null || typeof prev.payload.reason === "string")) corrupt("the released stop reason is not a string or null");
+    if (typeof prev.payload.session_id !== "string" || !prev.payload.session_id) corrupt("the released stop session_id is missing or not a string");
   }
   return { row, state: toState(row) };
 }
@@ -360,11 +398,11 @@ export async function engageSystemStop(client: Queryable, input: EngageStopInput
 
   return inStopTx(client, async () => {
     await assertAuthorizedHuman(client, req.actorId, req.sessionId);
-    const { row } = await readValidatedStopState(client);
+    const { row, state } = await readValidatedStopState(client);
     if (row.is_stopped) {
-      return { state: toState(row), eventId: row.current_event_id, idempotent: true };
+      return { state, eventId: row.current_event_id, idempotent: true };
     }
-    const generation = Number(row.generation) + 1;
+    const generation = state.generation + 1;
     const ev = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),
@@ -410,11 +448,11 @@ export async function releaseSystemStop(client: Queryable, input: ReleaseStopInp
     if (!(await hasActiveRole(client, req.actorId, "approver"))) {
       throw new RestartRequiresApproverError(`restart requires the 'approver' role: '${req.actorId}' does not hold it`);
     }
-    const { row } = await readValidatedStopState(client);
+    const { row, state } = await readValidatedStopState(client);
     if (!row.is_stopped) {
       throw new Error("system is not stopped: there is nothing to restart");
     }
-    const generation = Number(row.generation) + 1;
+    const generation = state.generation + 1;
     const ev = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),

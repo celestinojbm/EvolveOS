@@ -505,6 +505,96 @@ describe("G-00 stop — projection↔event corruption fails closed (isolated DB)
     );
     await expectFailsClosed();
   });
+
+  // --- strict generations + immediately-prior restart binding ---------------
+
+  async function forge(
+    eventType: string,
+    payload: Record<string, unknown>,
+    opts: { actorType?: string; timestamp?: string; actorId?: string } = {},
+  ): Promise<string> {
+    const ev = await appendEvent(gc, {
+      id: `EV-forge-${runId}-${seq++}`,
+      timestamp: opts.timestamp ?? new Date().toISOString(),
+      actor_type: (opts.actorType ?? "human") as "human" | "agent" | "kernel" | "watchdog" | "system",
+      actor_id: opts.actorId ?? stopperId,
+      event_type: eventType,
+      object_type: STOP_OBJECT_TYPE,
+      object_id: STOP_OBJECT_ID,
+      payload,
+    });
+    return ev.id;
+  }
+  async function setProjection(isStopped: boolean, generation: string | number, eventId: string, reason: string | null): Promise<void> {
+    await gc.query("DELETE FROM system_stop_state");
+    await gc.query(
+      "INSERT INTO system_stop_state (singleton, is_stopped, generation, current_event_id, actor_id, reason) VALUES (TRUE, $1, $2, $3, $4, $5)",
+      [isStopped, generation, eventId, stopperId, reason],
+    );
+  }
+
+  it.each([
+    ["a JSON string", "7"],
+    ["a boolean", true],
+    ["a float", 1.5],
+    ["zero", 0],
+    ["negative", -3],
+    ["past MAX_SAFE_INTEGER", 9007199254740992],
+  ] as const)("a current-transition payload.generation that is %s → corrupt", async (_label, badGen) => {
+    const id = await forge(STOP_EVENT_TYPE, { generation: badGen, reason: null, session_id: "s" });
+    await setProjection(true, 940, id, null);
+    await expectFailsClosed();
+  });
+
+  it("a projection generation past the safe integer range → corrupt", async () => {
+    const id = await forge(STOP_EVENT_TYPE, { generation: 945, reason: null, session_id: "s" });
+    await setProjection(true, "9007199254740992", id, null);
+    await expectFailsClosed();
+  });
+
+  it("a restart that releases a stop that is NOT the immediately-preceding one → corrupt", async () => {
+    const a = await forge(STOP_EVENT_TYPE, { generation: 960, reason: null, session_id: "s" });
+    await forge(STOP_EVENT_TYPE, { generation: 961, reason: null, session_id: "s" }); // B (immediately-prior)
+    const r = await forge(RESTART_EVENT_TYPE, { generation: 962, rationale: "x", session_id: "s", released_stop_event_id: a });
+    await setProjection(false, 962, r, "x");
+    await expectFailsClosed();
+  });
+
+  it("a restart with another restart between it and the released stop → corrupt", async () => {
+    const a = await forge(STOP_EVENT_TYPE, { generation: 970, reason: null, session_id: "s" });
+    await forge(RESTART_EVENT_TYPE, { generation: 971, rationale: "x", session_id: "s", released_stop_event_id: a });
+    const r2 = await forge(RESTART_EVENT_TYPE, { generation: 972, rationale: "y", session_id: "s", released_stop_event_id: a });
+    await setProjection(false, 972, r2, "y");
+    await expectFailsClosed();
+  });
+
+  it("a released (immediately-prior) stop whose payload.generation is a string → corrupt", async () => {
+    const a = await forge(STOP_EVENT_TYPE, { generation: "980", reason: null, session_id: "s" });
+    const r = await forge(RESTART_EVENT_TYPE, { generation: 981, rationale: "x", session_id: "s", released_stop_event_id: a });
+    await setProjection(false, 981, r, "x");
+    await expectFailsClosed();
+  });
+
+  it("a released stop with actor_type agent → corrupt", async () => {
+    const a = await forge(STOP_EVENT_TYPE, { generation: 990, reason: null, session_id: "s" }, { actorType: "agent" });
+    const r = await forge(RESTART_EVENT_TYPE, { generation: 991, rationale: "x", session_id: "s", released_stop_event_id: a });
+    await setProjection(false, 991, r, "x");
+    await expectFailsClosed();
+  });
+
+  it("a released stop missing session_id → corrupt", async () => {
+    const a = await forge(STOP_EVENT_TYPE, { generation: 993, reason: null }); // no session_id
+    const r = await forge(RESTART_EVENT_TYPE, { generation: 994, rationale: "x", session_id: "s", released_stop_event_id: a });
+    await setProjection(false, 994, r, "x");
+    await expectFailsClosed();
+  });
+
+  it("a released stop with an invalid timestamp → corrupt", async () => {
+    const a = await forge(STOP_EVENT_TYPE, { generation: 996, reason: null, session_id: "s" }, { timestamp: "nope" });
+    const r = await forge(RESTART_EVENT_TYPE, { generation: 997, rationale: "x", session_id: "s", released_stop_event_id: a });
+    await setProjection(false, 997, r, "x");
+    await expectFailsClosed();
+  });
 });
 
 describe("G-00 stop — DB-level integrity", () => {
