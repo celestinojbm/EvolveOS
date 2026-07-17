@@ -6,6 +6,8 @@
 
 Related build decision: [ADR-006](ARCHITECTURE_DECISIONS.md) (real-money flag stays off until this Pack is signed). Scope of the first venture: [MVP Scope](MVP_SCOPE.md). Phase 0 delivery item: [Phase 0 Backlog](PHASE_0_BACKLOG.md) P0-10.
 
+> **Operational pack (issue #11):** the single, machine-readable, signable instrument that the code actually reads and hashes to gate the `real_money` flag is [RATIFICATION_PACK.md](RATIFICATION_PACK.md). This document is the constitutional-context prose behind it; the operational Pack is the source of truth for the flag. See [RATIFICATION.md](RATIFICATION.md).
+
 ---
 
 ## 1. Founding Amendment Mode
