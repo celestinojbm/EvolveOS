@@ -82,9 +82,11 @@ The whole evaluation runs inside **one transaction at the default `READ COMMITTE
 
 Enabling `real_money` does **not** execute a payment. The pack's `THR-SPEND-EXEC` is `$0`: this deployment authorizes no spend execution at all in v1. The gate system independently rejects any `requestedSpend ≠ 0` (ADR-006, [`GATE_SYSTEM.md`](GATE_SYSTEM.md)), and that is unchanged by this flag. The flag is a **precondition** that records ratification; the actual money-moving mechanisms — payments, treasury, transfers — are out of scope here and are not built by issue #11.
 
-## Boundary with issue #12
+## Boundary with issue #12 (G-00)
 
-Issue #11 delivers only (1) the signable document, (2) the human signature protocol, (3) the derived `real_money` flag. It does **not** build the technical G-00 stop mechanism, a technical restart, or any spend execution — those are later work (the manual G-00 procedure in `RATIFICATION_PACK.md` §D is documentary only; there is no `stop.ts` and `gates.ts` is not blocked). The automatic G-00 mechanism is **issue #12**.
+Issue #11 delivers only (1) the signable document, (2) the human signature protocol, (3) the derived `real_money` flag — no spend execution. The **technical G-00 stop mechanism** it deliberately left out is now built in **issue #12** ([G00_STOP.md](G00_STOP.md)): `app/src/lib/stop.ts` + a central guard in `gates.ts`.
+
+`real_money` and G-00 are **orthogonal**. `real_money` gates whether money may **ever** move (false until the pack is signed; even `true` moves no money — `THR-SPEND-EXEC = 0`). G-00 halts activity **now**, regardless of ratification — the stop works while the pack is unratified and `real_money` is `false`. One is a financial precondition; the other is an operational halt. The `RATIFICATION_PACK.md` §D manual G-00 procedure remains the documentary description of who may stop/restart; issue #12 makes it enforceable in code.
 
 ## Running it
 

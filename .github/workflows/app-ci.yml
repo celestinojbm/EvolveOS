@@ -65,6 +65,9 @@ jobs:
       - name: Ratification + real_money have a single owner (no flag bypass)
         run: pnpm check:ratification
 
+      - name: G-00 stop mechanism has a single owner (no stop bypass)
+        run: pnpm check:stop
+
       - name: Migrations apply to a clean DB
         run: pnpm migrate
 

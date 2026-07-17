@@ -63,7 +63,7 @@ Registry and spend checks are pure and run before the transaction; the DR is loa
 ## Boundaries (documented limits)
 
 - **Issue #10 (DR tooling) — done:** the DR is **filed and immutable** ([DECISION_RECORDS](DECISION_RECORDS.md)); the gate loads it by `decisionRecordId` and binds to its stored digest. This protocol is otherwise unchanged, and the G-01 pass still mints the venture in the same atomic operation with one `gate_passed`.
-- **Issue #12 (G-00):** the stop mechanism. v0 only recognizes G-00 and refuses to "pass" it.
+- **Issue #12 (G-00) — done:** the [manual stop mechanism](G00_STOP.md). G-00 is still not a "gate pass" (the dispatcher refuses to pass it), but the stop now *enforces*: a single central guard (`assertSystemRunning` inside `runGateTx`, after the advisory lock and before any effect) makes **every** gate route refuse while the system is stopped — zero `gate_passed`, zero transition, zero partial effect. Restart is an approver action with a logged rationale.
 - No dashboard/UI/API, no agents, no external communications or data execution (G-17/G-18 record authorization only), no real money, no real queue.
 
 ## What it guarantees / does NOT guarantee
