@@ -6,29 +6,36 @@
  * derived projections (users, ventures, gate_passes, decision_records,
  * system_stop_state) are views onto it. This module documents, in one place, the
  * CONTRACT of every event type a Phase 0 productive module emits: who may emit
- * it (actor types), what it is about (object type + object-id obligation), and
- * the exact shape of its payload (a JSON Schema, or `null` when the payload must
- * be null). It is DECLARATIVE only — it opens no transaction, reads no database,
- * emits no event, and never mutates a stored event.
+ * it (actor types), what it is about (object type + object-id obligation), the
+ * exact shape of its payload (a JSON Schema, or `null`), AND the cross-field
+ * INVARIANTS the event asserts about itself (e.g. a gate pass's `object_id`
+ * equals its `payload.venture_id`; an approval's approver differs from its
+ * proposer). It is DECLARATIVE + PURE only — it opens no transaction, reads no
+ * database, emits no event, and never mutates a stored event.
  *
  * It is NOT a second hashing authority. app/src/lib/eventlog.ts remains the sole
  * owner of `canonicalize` / `computeHash` / `previous_hash` semantics and the
  * `events.seq` chain order; this registry adds a *convention* layer on top of the
  * integrity layer. A cryptographically valid event (its stored hash matches a
- * recomputation) can still be convention-invalid — an unknown event type, a wrong
- * actor type, a malformed payload — and `validateEventConvention` reports exactly
- * that, as structured errors, never a bare boolean.
+ * recomputation) can still be convention-invalid — an unknown type, a wrong
+ * actor, a malformed payload, or a violated invariant — and
+ * `validateEventConvention` reports exactly that, as structured errors with
+ * precise paths, never a bare boolean. The SHA-256 used for the docs *contracts
+ * digest* below is over the CONTRACT DEFINITIONS (documentation), never events.
  *
- * Runtime-immutable: every convention and its payload schema is deep-frozen at
- * load, the array is exported read-only and deterministically ordered (issue
- * ascending, then module emission order), and there are no duplicate event types.
- * The CLI (ops/verify-log.ts), the drift guard (ops/check-audit-conventions.ts),
- * and the tests all import from here — one inventory, no divergence.
+ * Runtime-immutable: every convention, payload schema, and invariant list is
+ * deep-frozen at load, the array is exported read-only and deterministically
+ * ordered (issue ascending, then module emission order), and there are no
+ * duplicate event types. The CLI (ops/verify-log.ts), the drift guard
+ * (ops/check-audit-conventions.ts), and the tests all import from here.
  *
  * Adding an event type: append its convention here (in issue order), give it a
- * real productive writer, and mirror the row in docs/AUDIT_CONVENTIONS.md between
- * the table markers. `pnpm check:audit` fails CI until all three agree.
+ * real productive writer, and regenerate docs/AUDIT_CONVENTIONS.md (the summary
+ * table AND the full contracts section) between their markers. `pnpm check:audit`
+ * fails CI until the registry, the productive writers (verified by AST), and the
+ * doc all agree.
  */
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 // --- ajv (CJS under NodeNext ESM: require + .default; mirrors dr.ts) ----------
@@ -67,6 +74,9 @@ export const ACTOR_TYPES: readonly ActorType[] = Object.freeze([
   "system",
 ]);
 
+/** The JS safe-integer bound (mirrors system_stop_state_gen_safe in 0007). */
+export const MAX_SAFE_GENERATION = 9007199254740991; // Number.MAX_SAFE_INTEGER
+
 /**
  * The event fields a convention is validated against — exactly
  * schemas/event.schema.json (the fields eventlog.ts hashes) with the caller's
@@ -91,11 +101,11 @@ export interface AuditEventRecord {
 
 /**
  * Sentinel `objectType`: the writer sets `object_type` to a caller-supplied,
- * NON-NULL value that varies per call. `approval.recorded` binds to whatever
- * artifact is being approved (a `decision-record`, or another object type);
- * `gate_passed` binds to a `venture` for pipeline gates and to the authorized
- * subject's type for standing gates. The contract requires a non-empty
- * `object_type`, but not one fixed string.
+ * NON-BLANK value that varies per call. `approval.recorded` binds to whatever
+ * artifact is being approved; `gate_passed` binds to a `venture` for pipeline
+ * gates and to the authorized subject's type for standing gates. The contract
+ * requires a non-blank `object_type`, but not one fixed string — the exact
+ * binding is then pinned by that event's invariants.
  */
 export const ANY_OBJECT_TYPE = "*";
 
@@ -105,12 +115,33 @@ export type ObjectIdRule = "required" | "null" | "optional";
 export interface ObjectContract {
   /**
    * The exact required `object_type` string; `ANY_OBJECT_TYPE` when the writer
-   * sets a caller-supplied non-null value; or `null` when `object_type` must be
+   * sets a caller-supplied non-blank value; or `null` when `object_type` must be
    * null.
    */
   objectType: string | null;
-  /** Whether `object_id` must be a non-empty string / must be null / may be either. */
+  /** Whether `object_id` must be a non-blank string / must be null / may be either. */
   objectId: ObjectIdRule;
+}
+
+export type ConventionErrorCategory =
+  | "base_record"
+  | "unknown_event_type"
+  | "actor_type"
+  | "object_type"
+  | "object_id"
+  | "payload_null"
+  | "payload_schema"
+  | "venture_reference"
+  | "invariant";
+
+/** One structured convention failure: category + path + message (+ expected/actual). */
+export interface ConventionError {
+  category: ConventionErrorCategory;
+  /** A dotted path within the event record (e.g. `payload.session_id`). */
+  path: string;
+  message: string;
+  expected?: string;
+  actual?: string;
 }
 
 export interface EventConvention {
@@ -129,22 +160,35 @@ export interface EventConvention {
   /**
    * The JSON Schema (draft 2020-12) the payload must satisfy, or `null` when the
    * payload MUST be null. Schemas are strict: `additionalProperties: false`, real
-   * types (no coercion), required fields enumerated.
+   * types (no coercion), required fields enumerated, non-blank strings.
    */
   payloadSchema: Record<string, unknown> | null;
   /**
-   * Dot-paths (in addition to the universal `object_type='venture'` rule) at
-   * which a venture id may be referenced — used by the extract's `--venture`
-   * filter so a venture-scoped event bound to another artifact (a standing gate
-   * pass authorizing a subject, carrying `payload.venture_id`) is still matched.
-   * Empty when the event carries no such reference.
+   * Dot-paths (besides the universal `object_type='venture'` rule) at which a
+   * venture id may be referenced — used by the extract's `--venture` filter.
    */
   ventureReferencePaths: readonly string[];
+  /**
+   * Human/machine-readable statements of the cross-field invariants this event
+   * asserts (documented AND enforced by `validateInvariants`). Included in the
+   * generated docs + contracts digest, so changing an invariant changes the doc.
+   */
+  invariants: readonly string[];
+  /**
+   * Pure cross-field / whole-record checks that the payload JSON Schema cannot
+   * express (equalities between fields, variant exclusivity, conditional digest
+   * rules). Returns structured errors with precise paths; `[]` when it holds.
+   * Never touches a DB, session, or projection — only the record itself.
+   */
+  validateInvariants?: (record: AuditEventRecord) => ConventionError[];
 }
 
-// --- shared payload schema fragments -----------------------------------------
+// --- shared schema fragments + primitives ------------------------------------
 
-const NON_EMPTY_STRING = { type: "string", minLength: 1 } as const;
+/** A string with at least one NON-WHITESPACE character (not merely non-empty). */
+export const NON_BLANK_STRING = { type: "string", minLength: 1, pattern: "\\S" } as const;
+const NULLABLE_NON_BLANK = { oneOf: [{ type: "null" }, NON_BLANK_STRING] } as const;
+const SHA256_STRING = { type: "string", pattern: "^[0-9a-f]{64}$" } as const;
 const ROLE_ENUM = { type: "string", enum: ["operator", "approver", "viewer"] } as const;
 const ANALYSIS_ITEM_ENUM = {
   type: "string",
@@ -156,6 +200,26 @@ const ANALYSIS_ITEM_ENUM = {
     "legal_analysis",
   ],
 } as const;
+
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/** True for a string with at least one non-whitespace character. */
+export function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Read a payload field defensively (undefined when payload is not an object). */
+function pget(record: AuditEventRecord, key: string): unknown {
+  return isPlainObject(record.payload) ? record.payload[key] : undefined;
+}
+
+function has(record: AuditEventRecord, key: string): boolean {
+  return isPlainObject(record.payload) && Object.prototype.hasOwnProperty.call(record.payload, key);
+}
 
 /** Build a strict object schema: additionalProperties false, all listed required. */
 function strictObject(
@@ -170,6 +234,127 @@ function strictObject(
   };
 }
 
+// --- invariant helpers -------------------------------------------------------
+
+function err(
+  category: ConventionErrorCategory,
+  path: string,
+  message: string,
+  expected?: string,
+  actual?: string,
+): ConventionError {
+  return { category, path, message, expected, actual };
+}
+
+function show(v: unknown): string {
+  if (v === undefined) return "(absent)";
+  if (v === null) return "null";
+  if (typeof v === "string") return v;
+  return JSON.stringify(v);
+}
+
+const PIPELINE_GATE_SET = new Set(["G-02", "G-03", "G-04", "G-05", "G-06"]);
+const STANDING_GATE_SET = new Set(["G-17", "G-18"]);
+
+// --- per-event invariants ----------------------------------------------------
+
+function approvalRecordedInvariants(record: AuditEventRecord): ConventionError[] {
+  const out: ConventionError[] = [];
+  const proposer = pget(record, "proposer_actor_id");
+  if (isNonBlankString(record.actor_id) && isNonBlankString(proposer) && record.actor_id === proposer) {
+    out.push(err("invariant", "payload.proposer_actor_id", "the approver (actor_id) must differ from the proposer", "actor_id !== proposer_actor_id", record.actor_id));
+  }
+  const digest = pget(record, "object_digest");
+  if (record.object_type === "decision-record") {
+    // A decision-record approval MUST bind the exact content (never null).
+    if (typeof digest !== "string" || !SHA256_RE.test(digest)) {
+      out.push(err("invariant", "payload.object_digest", "a decision-record approval must carry a 64-char lowercase SHA-256 object_digest (not null)", "^[0-9a-f]{64}$", show(digest)));
+    }
+  } else if (digest !== null && (typeof digest !== "string" || !SHA256_RE.test(digest))) {
+    out.push(err("invariant", "payload.object_digest", "object_digest must be null or a 64-char lowercase SHA-256 for a non-decision-record approval", "null | ^[0-9a-f]{64}$", show(digest)));
+  }
+  return out;
+}
+
+function gatePassedInvariants(record: AuditEventRecord): ConventionError[] {
+  const out: ConventionError[] = [];
+  const gateId = pget(record, "gate_id");
+  const transition = pget(record, "transition_kind");
+  const effect = pget(record, "effect");
+  const ventureId = pget(record, "venture_id");
+  const subjectType = pget(record, "subject_type");
+  const subjectId = pget(record, "subject_id");
+  const fromState = pget(record, "from_state");
+  const toState = pget(record, "to_state");
+  const opportunityRef = pget(record, "opportunity_ref");
+  const killCriteria = pget(record, "kill_criteria");
+  const proposer = pget(record, "proposer_actor_id");
+  const approver = pget(record, "approver_actor_id");
+
+  // Common to every implemented variant: the pass actor is the approver, and
+  // the proposer differs from the approver.
+  if (isNonBlankString(approver) && record.actor_id !== approver) {
+    out.push(err("invariant", "actor_id", "the gate-pass actor must be the approver", "actor_id === approver_actor_id", show(record.actor_id)));
+  }
+  if (isNonBlankString(proposer) && isNonBlankString(approver) && proposer === approver) {
+    out.push(err("invariant", "payload.approver_actor_id", "proposer and approver must differ", "proposer !== approver", show(approver)));
+  }
+
+  const requireAbsent = (key: string): void => {
+    if (has(record, key)) out.push(err("invariant", `payload.${key}`, `${key} must be absent for this gate variant`, "(absent)", show(pget(record, key))));
+  };
+
+  if (gateId === "G-01") {
+    if (transition !== "gate_pass") out.push(err("invariant", "payload.transition_kind", "G-01 must be a gate_pass", "gate_pass", show(transition)));
+    if (record.object_type !== "venture") out.push(err("invariant", "object_type", "G-01 binds to a venture", "venture", show(record.object_type)));
+    if (!isNonBlankString(ventureId)) out.push(err("invariant", "payload.venture_id", "G-01 requires a non-blank venture_id", "non-blank string", show(ventureId)));
+    else if (record.object_id !== ventureId) out.push(err("invariant", "object_id", "G-01 object_id must equal payload.venture_id", show(ventureId), show(record.object_id)));
+    if (fromState !== null) out.push(err("invariant", "payload.from_state", "G-01 from_state must be null (pre-venture)", "null", show(fromState)));
+    if (!isNonBlankString(toState)) out.push(err("invariant", "payload.to_state", "G-01 to_state must be non-blank", "non-blank string", show(toState)));
+    if (effect !== "venture_created") out.push(err("invariant", "payload.effect", "G-01 effect must be venture_created", "venture_created", show(effect)));
+    if (!isNonBlankString(opportunityRef)) out.push(err("invariant", "payload.opportunity_ref", "G-01 requires a non-blank opportunity_ref", "non-blank string", show(opportunityRef)));
+    requireAbsent("subject_type");
+    requireAbsent("subject_id");
+    if (!Array.isArray(killCriteria)) out.push(err("invariant", "payload.kill_criteria", "G-01 kill_criteria must be an array", "array", show(killCriteria)));
+  } else if (typeof gateId === "string" && PIPELINE_GATE_SET.has(gateId)) {
+    if (transition !== "gate_pass") out.push(err("invariant", "payload.transition_kind", "a pipeline gate must be a gate_pass", "gate_pass", show(transition)));
+    if (record.object_type !== "venture") out.push(err("invariant", "object_type", "a pipeline gate binds to a venture", "venture", show(record.object_type)));
+    if (!isNonBlankString(ventureId)) out.push(err("invariant", "payload.venture_id", "a pipeline gate requires a non-blank venture_id", "non-blank string", show(ventureId)));
+    else if (record.object_id !== ventureId) out.push(err("invariant", "object_id", "pipeline object_id must equal payload.venture_id", show(ventureId), show(record.object_id)));
+    if (!isNonBlankString(fromState)) out.push(err("invariant", "payload.from_state", "a pipeline gate requires a non-blank from_state", "non-blank string", show(fromState)));
+    if (!isNonBlankString(toState)) out.push(err("invariant", "payload.to_state", "a pipeline gate requires a non-blank to_state", "non-blank string", show(toState)));
+    if (effect !== "stage_advanced") out.push(err("invariant", "payload.effect", "a pipeline gate effect must be stage_advanced", "stage_advanced", show(effect)));
+    requireAbsent("opportunity_ref");
+    requireAbsent("subject_type");
+    requireAbsent("subject_id");
+    if (!Array.isArray(killCriteria)) out.push(err("invariant", "payload.kill_criteria", "a pipeline gate kill_criteria must be an array", "array", show(killCriteria)));
+  } else if (typeof gateId === "string" && STANDING_GATE_SET.has(gateId)) {
+    if (transition !== "authorization") out.push(err("invariant", "payload.transition_kind", "a standing gate must be an authorization", "authorization", show(transition)));
+    if (!isNonBlankString(subjectType)) out.push(err("invariant", "payload.subject_type", "a standing gate requires a non-blank subject_type", "non-blank string", show(subjectType)));
+    else if (record.object_type !== subjectType) out.push(err("invariant", "object_type", "standing object_type must equal payload.subject_type", show(subjectType), show(record.object_type)));
+    if (!isNonBlankString(subjectId)) out.push(err("invariant", "payload.subject_id", "a standing gate requires a non-blank subject_id", "non-blank string", show(subjectId)));
+    else if (record.object_id !== subjectId) out.push(err("invariant", "object_id", "standing object_id must equal payload.subject_id", show(subjectId), show(record.object_id)));
+    if (fromState !== null) out.push(err("invariant", "payload.from_state", "a standing gate from_state must be null", "null", show(fromState)));
+    if (toState !== null) out.push(err("invariant", "payload.to_state", "a standing gate to_state must be null", "null", show(toState)));
+    if (ventureId !== null && !isNonBlankString(ventureId)) out.push(err("invariant", "payload.venture_id", "a standing gate venture_id must be null or non-blank", "null | non-blank string", show(ventureId)));
+    requireAbsent("effect");
+    requireAbsent("opportunity_ref");
+    if (killCriteria !== null && !Array.isArray(killCriteria)) out.push(err("invariant", "payload.kill_criteria", "a standing gate kill_criteria must be an array or null", "array | null", show(killCriteria)));
+  } else {
+    out.push(err("invariant", "payload.gate_id", "gate_passed only recognizes the Phase 0 implemented gates (G-01..G-06, G-17, G-18)", "G-01..G-06 | G-17 | G-18", show(gateId)));
+  }
+  return out;
+}
+
+function ratificationInvariants(record: AuditEventRecord): ConventionError[] {
+  const out: ConventionError[] = [];
+  const signer = pget(record, "signer_actor_id");
+  if (isNonBlankString(signer) && record.actor_id !== signer) {
+    out.push(err("invariant", "payload.signer_actor_id", "the signature actor must be the signer", "actor_id === signer_actor_id", show(record.actor_id)));
+  }
+  return out;
+}
+
 // --- the canonical inventory (deterministic order: issue asc, emission order) ---
 
 const CONVENTIONS: EventConvention[] = [
@@ -181,8 +366,9 @@ const CONVENTIONS: EventConvention[] = [
     introducedByIssue: 7,
     allowedActorTypes: ["human"],
     objectContract: { objectType: "user", objectId: "required" },
-    payloadSchema: strictObject({ display_name: NON_EMPTY_STRING }),
+    payloadSchema: strictObject({ display_name: NON_BLANK_STRING }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "role.granted",
@@ -193,6 +379,7 @@ const CONVENTIONS: EventConvention[] = [
     objectContract: { objectType: "user", objectId: "required" },
     payloadSchema: strictObject({ role: ROLE_ENUM }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "role.revoked",
@@ -203,6 +390,7 @@ const CONVENTIONS: EventConvention[] = [
     objectContract: { objectType: "user", objectId: "required" },
     payloadSchema: strictObject({ role: ROLE_ENUM }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "approval.recorded",
@@ -214,14 +402,17 @@ const CONVENTIONS: EventConvention[] = [
     // The approved artifact's type varies (decision-record, or another object).
     objectContract: { objectType: ANY_OBJECT_TYPE, objectId: "required" },
     payloadSchema: strictObject({
-      proposer_actor_id: NON_EMPTY_STRING,
-      // null for a non-decision-record approval; a 64-char SHA-256 hex for a
-      // decision-record. Both cases go through this event type.
-      object_digest: {
-        oneOf: [{ type: "null" }, { type: "string", pattern: "^[0-9a-f]{64}$" }],
-      },
+      proposer_actor_id: NON_BLANK_STRING,
+      // present, string-or-null; the exact digest rule is enforced per object_type by the invariant.
+      object_digest: { type: ["string", "null"] },
     }),
     ventureReferencePaths: [],
+    invariants: [
+      "actor_id !== payload.proposer_actor_id (approver differs from proposer)",
+      "object_type === 'decision-record' ⇒ payload.object_digest is a 64-char lowercase SHA-256 (never null)",
+      "object_type !== 'decision-record' ⇒ payload.object_digest is null or a 64-char lowercase SHA-256",
+    ],
+    validateInvariants: approvalRecordedInvariants,
   },
   {
     eventType: "auth.session_started",
@@ -232,6 +423,7 @@ const CONVENTIONS: EventConvention[] = [
     objectContract: { objectType: "session", objectId: "required" },
     payloadSchema: null,
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "auth.session_ended",
@@ -242,6 +434,7 @@ const CONVENTIONS: EventConvention[] = [
     objectContract: { objectType: "session", objectId: "required" },
     payloadSchema: null,
     ventureReferencePaths: [],
+    invariants: [],
   },
 
   // --- issue #8 (P0-7): venture record + macro-state machine -----------------
@@ -254,13 +447,14 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "venture", objectId: "required" },
     payloadSchema: strictObject({
-      from: NON_EMPTY_STRING,
-      to: NON_EMPTY_STRING,
+      from: NON_BLANK_STRING,
+      to: NON_BLANK_STRING,
       transition_kind: { type: "string", enum: ["handoff"] },
-      authorization_gate_id: NON_EMPTY_STRING,
-      authorization_ref: NON_EMPTY_STRING,
+      authorization_gate_id: NON_BLANK_STRING,
+      authorization_ref: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "venture.analysis_item_completed",
@@ -272,9 +466,10 @@ const CONVENTIONS: EventConvention[] = [
     objectContract: { objectType: "venture", objectId: "required" },
     payloadSchema: strictObject({
       item: ANALYSIS_ITEM_ENUM,
-      evidence_ref: NON_EMPTY_STRING,
+      evidence_ref: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "venture.killed",
@@ -285,10 +480,11 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "venture", objectId: "required" },
     payloadSchema: strictObject({
-      reason: NON_EMPTY_STRING,
-      post_mortem_ref: NON_EMPTY_STRING,
+      reason: NON_BLANK_STRING,
+      post_mortem_ref: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
 
   // --- issue #9 (P0-8): gate system v0 ---------------------------------------
@@ -300,13 +496,9 @@ const CONVENTIONS: EventConvention[] = [
     introducedByIssue: 9,
     allowedActorTypes: ["human"],
     // Pipeline gates: object is the venture. Standing gates: object is the
-    // authorized subject (caller-supplied type). Both bind a non-null object_id.
+    // authorized subject (caller-supplied type). Both bind a non-blank object_id;
+    // the exact per-variant binding is pinned by the invariants below.
     objectContract: { objectType: ANY_OBJECT_TYPE, objectId: "required" },
-    // A single strict schema covering all three real shapes: the 13 common
-    // fields are required; the four variant fields (effect, opportunity_ref for
-    // G-01; subject_type/subject_id for standing gates) are optional. Types are
-    // exact and additionalProperties is false, so a forged or malformed
-    // gate_passed payload is rejected even though it links cryptographically.
     payloadSchema: {
       type: "object",
       additionalProperties: false,
@@ -326,32 +518,34 @@ const CONVENTIONS: EventConvention[] = [
         "venture_id",
       ],
       properties: {
-        gate_id: NON_EMPTY_STRING,
-        gate_name: NON_EMPTY_STRING,
-        dr_id: NON_EMPTY_STRING,
-        approval_event_id: NON_EMPTY_STRING,
-        proposer_actor_id: NON_EMPTY_STRING,
-        approver_actor_id: NON_EMPTY_STRING,
-        // pipeline gates: an array (possibly empty); standing gates: array or null.
-        kill_criteria: {
-          oneOf: [{ type: "null" }, { type: "array", items: { type: "string" } }],
-        },
-        reversibility_class: NON_EMPTY_STRING,
-        dr_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+        gate_id: NON_BLANK_STRING,
+        gate_name: NON_BLANK_STRING,
+        dr_id: NON_BLANK_STRING,
+        approval_event_id: NON_BLANK_STRING,
+        proposer_actor_id: NON_BLANK_STRING,
+        approver_actor_id: NON_BLANK_STRING,
+        kill_criteria: { oneOf: [{ type: "null" }, { type: "array", items: { type: "string" } }] },
+        reversibility_class: NON_BLANK_STRING,
+        dr_digest: SHA256_STRING,
         transition_kind: { type: "string", enum: ["gate_pass", "authorization"] },
-        from_state: { oneOf: [{ type: "null" }, NON_EMPTY_STRING] },
-        to_state: { oneOf: [{ type: "null" }, NON_EMPTY_STRING] },
-        venture_id: { oneOf: [{ type: "null" }, NON_EMPTY_STRING] },
-        // variant fields:
+        from_state: NULLABLE_NON_BLANK,
+        to_state: NULLABLE_NON_BLANK,
+        venture_id: NULLABLE_NON_BLANK,
         effect: { type: "string", enum: ["venture_created", "stage_advanced"] },
-        opportunity_ref: NON_EMPTY_STRING,
-        subject_type: NON_EMPTY_STRING,
-        subject_id: NON_EMPTY_STRING,
+        opportunity_ref: NON_BLANK_STRING,
+        subject_type: NON_BLANK_STRING,
+        subject_id: NON_BLANK_STRING,
       },
     },
-    // A standing gate pass is object-bound to the subject, but may carry the
-    // related venture in payload.venture_id — the extract must match it there.
     ventureReferencePaths: ["payload.venture_id"],
+    invariants: [
+      "actor_id === payload.approver_actor_id; payload.proposer_actor_id !== payload.approver_actor_id",
+      "G-01: transition_kind='gate_pass', object_type='venture', object_id===payload.venture_id (non-blank), from_state=null, to_state non-blank, effect='venture_created', opportunity_ref non-blank, subject_* absent, kill_criteria array",
+      "G-02..G-06: transition_kind='gate_pass', object_type='venture', object_id===payload.venture_id, from_state & to_state non-blank, effect='stage_advanced', opportunity_ref/subject_* absent, kill_criteria array",
+      "G-17/G-18: transition_kind='authorization', object_type===payload.subject_type, object_id===payload.subject_id (non-blank), from_state=null, to_state=null, venture_id null|non-blank, effect/opportunity_ref absent, kill_criteria array|null",
+      "any other gate_id is rejected (only the Phase 0 implemented gates)",
+    ],
+    validateInvariants: gatePassedInvariants,
   },
 
   // --- issue #10 (P0-9): Decision Record tooling -----------------------------
@@ -363,11 +557,12 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "decision-record", objectId: "required" },
     payloadSchema: strictObject({
-      content_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
-      schema_version: NON_EMPTY_STRING,
+      content_digest: SHA256_STRING,
+      schema_version: NON_BLANK_STRING,
       amends_dr_id: { type: "null" },
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "decision_record.amended",
@@ -378,11 +573,12 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "decision-record", objectId: "required" },
     payloadSchema: strictObject({
-      content_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
-      schema_version: NON_EMPTY_STRING,
-      amends_dr_id: NON_EMPTY_STRING,
+      content_digest: SHA256_STRING,
+      schema_version: NON_BLANK_STRING,
+      amends_dr_id: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
 
   // --- issue #11 (P0-10): founding ratification ------------------------------
@@ -395,14 +591,16 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "founding-ratification-pack", objectId: "required" },
     payloadSchema: strictObject({
-      pack_digest: { type: "string", pattern: "^[0-9a-f]{64}$" },
-      pack_version: NON_EMPTY_STRING,
-      signer_actor_id: NON_EMPTY_STRING,
-      signer_capacity: NON_EMPTY_STRING,
-      acknowledgement_version: NON_EMPTY_STRING,
-      session_id: NON_EMPTY_STRING,
+      pack_digest: SHA256_STRING,
+      pack_version: NON_BLANK_STRING,
+      signer_actor_id: NON_BLANK_STRING,
+      signer_capacity: NON_BLANK_STRING,
+      acknowledgement_version: NON_BLANK_STRING,
+      session_id: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: ["actor_id === payload.signer_actor_id"],
+    validateInvariants: ratificationInvariants,
   },
 
   // --- issue #12 (P0-11): G-00 manual stop -----------------------------------
@@ -415,11 +613,12 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "system-stop", objectId: "required" },
     payloadSchema: strictObject({
-      generation: { type: "integer", minimum: 1 },
-      reason: { oneOf: [{ type: "null" }, NON_EMPTY_STRING] },
-      session_id: NON_EMPTY_STRING,
+      generation: { type: "integer", minimum: 1, maximum: MAX_SAFE_GENERATION },
+      reason: NULLABLE_NON_BLANK,
+      session_id: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
   {
     eventType: "system.stop_released",
@@ -430,12 +629,13 @@ const CONVENTIONS: EventConvention[] = [
     allowedActorTypes: ["human"],
     objectContract: { objectType: "system-stop", objectId: "required" },
     payloadSchema: strictObject({
-      generation: { type: "integer", minimum: 1 },
-      rationale: NON_EMPTY_STRING,
-      session_id: NON_EMPTY_STRING,
-      released_stop_event_id: NON_EMPTY_STRING,
+      generation: { type: "integer", minimum: 1, maximum: MAX_SAFE_GENERATION },
+      rationale: NON_BLANK_STRING,
+      session_id: NON_BLANK_STRING,
+      released_stop_event_id: NON_BLANK_STRING,
     }),
     ventureReferencePaths: [],
+    invariants: [],
   },
 ];
 
@@ -484,27 +684,6 @@ for (const c of EVENT_CONVENTIONS) {
 
 // --- structured convention validation ----------------------------------------
 
-export type ConventionErrorCategory =
-  | "base_record"
-  | "unknown_event_type"
-  | "actor_type"
-  | "object_type"
-  | "object_id"
-  | "payload_null"
-  | "payload_schema"
-  | "venture_reference";
-
-/** One structured convention failure: category + path + message (+ expected/actual). */
-export interface ConventionError {
-  category: ConventionErrorCategory;
-  /** A dotted path within the event record (e.g. `payload.session_id`). */
-  path: string;
-  message: string;
-  expected?: string;
-  actual?: string;
-}
-
-const SHA256_RE = /^[0-9a-f]{64}$/;
 const ISO_DATETIME_RE =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/;
 
@@ -533,10 +712,6 @@ export function isValidEventTimestamp(value: unknown): boolean {
   return Number.isFinite(new Date(value).getTime());
 }
 
-function isNonEmptyString(v: unknown): v is string {
-  return typeof v === "string" && v.length > 0;
-}
-
 /** Read a value at a dot-path (e.g. `payload.venture_id`) — undefined if absent. */
 function readPath(record: AuditEventRecord, path: string): unknown {
   let cur: unknown = record;
@@ -554,21 +729,25 @@ function typeName(v: unknown): string {
 }
 
 /**
- * Validate one event against the base record rules AND its event-type contract,
- * returning EVERY failure as a structured error (empty array = valid). This is a
- * pure primitive: no DB, no repair, no normalization — a historical event is
- * judged exactly as stored.
+ * Validate one event against the base record rules, its event-type contract, AND
+ * its cross-field invariants, returning EVERY failure as a structured error
+ * (empty array = valid). Pure: no DB, no session, no projection, no repair, no
+ * normalization — a historical event is judged exactly as stored.
  *
- * Base rules (independent of type): non-empty `id`; a strict RFC3339 `timestamp`
- * with real calendar fields; `actor_type` in the schema enum; non-empty
- * `actor_id`; `event_type` registered; `hash` a 64-char lowercase SHA-256;
- * `previous_hash` null or SHA-256; `trace_id` null or non-empty.
+ * Base rules (independent of type): non-blank `id`; a strict RFC3339 `timestamp`
+ * with real calendar fields; `actor_type` in the schema enum; non-blank
+ * `actor_id`; a non-blank, registered `event_type`; `hash` a 64-char lowercase
+ * SHA-256; `previous_hash` null or SHA-256; `trace_id` null or non-blank.
  *
- * Contract rules (per type): `actor_type` allowed; exact `object_type` (or a
- * non-null one for the `*` sentinel, or null); `object_id` per its obligation;
- * payload null when the type carries no payload, else valid against the type's
- * strict JSON Schema (exact types, no coercion, additionalProperties false);
- * each declared venture-reference path, when present, a non-empty string.
+ * Contract rules (per type): `actor_type` allowed; the object binding
+ * (fixed/`*`/null type, and object-id obligation); payload null when the type
+ * carries no payload, else valid against the type's strict JSON Schema (exact
+ * types, no coercion, additionalProperties false, non-blank strings); each
+ * declared venture-reference path, when present, non-blank.
+ *
+ * Invariant rules (per type): the cross-field equalities and variant contracts
+ * the event asserts (gate-pass variants, approval separation + digest, ratifier
+ * identity), checked ONLY against the record itself.
  *
  * NOTE: this does NOT check the hash chain (that is eventlog.ts / the CLI). A
  * cryptographically valid event can still fail here.
@@ -586,8 +765,8 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
   };
 
   // --- base record (integrity-adjacent, but not the hash chain) --------------
-  if (!isNonEmptyString(record.id)) {
-    push("base_record", "id", "id must be a non-empty string", "non-empty string", typeName(record.id));
+  if (!isNonBlankString(record.id)) {
+    push("base_record", "id", "id must be a non-blank string", "non-blank string", typeName(record.id));
   }
   if (!isValidEventTimestamp(record.timestamp)) {
     push(
@@ -599,16 +778,10 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
     );
   }
   if (!ACTOR_TYPES.includes(record.actor_type as ActorType)) {
-    push(
-      "base_record",
-      "actor_type",
-      "actor_type must be one of the schema actor types",
-      ACTOR_TYPES.join("|"),
-      String(record.actor_type),
-    );
+    push("base_record", "actor_type", "actor_type must be one of the schema actor types", ACTOR_TYPES.join("|"), String(record.actor_type));
   }
-  if (!isNonEmptyString(record.actor_id)) {
-    push("base_record", "actor_id", "actor_id must be a non-empty string", "non-empty string", typeName(record.actor_id));
+  if (!isNonBlankString(record.actor_id)) {
+    push("base_record", "actor_id", "actor_id must be a non-blank string", "non-blank string", typeName(record.actor_id));
   }
   if (typeof record.hash !== "string" || !SHA256_RE.test(record.hash)) {
     push("base_record", "hash", "hash must be a 64-char lowercase SHA-256 hex string", "^[0-9a-f]{64}$", String(record.hash));
@@ -616,11 +789,15 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
   if (record.previous_hash !== null && (typeof record.previous_hash !== "string" || !SHA256_RE.test(record.previous_hash))) {
     push("base_record", "previous_hash", "previous_hash must be null or a 64-char lowercase SHA-256 hex string", "null | ^[0-9a-f]{64}$", String(record.previous_hash));
   }
-  if (record.trace_id !== null && !isNonEmptyString(record.trace_id)) {
-    push("base_record", "trace_id", "trace_id must be null or a non-empty string", "null | non-empty string", typeName(record.trace_id));
+  if (record.trace_id !== null && !isNonBlankString(record.trace_id)) {
+    push("base_record", "trace_id", "trace_id must be null or a non-blank string", "null | non-blank string", typeName(record.trace_id));
   }
 
-  // --- event type must be registered -----------------------------------------
+  // --- event type must be a non-blank, registered string ---------------------
+  if (!isNonBlankString(record.event_type)) {
+    push("base_record", "event_type", "event_type must be a non-blank string", "non-blank string", typeName(record.event_type));
+    return errors;
+  }
   const convention = getConvention(record.event_type);
   if (!convention) {
     push(
@@ -630,19 +807,12 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
       EVENT_TYPES.join("|"),
       String(record.event_type),
     );
-    // Without a contract, the object/payload rules cannot be applied.
     return errors;
   }
 
   // --- actor type allowed ----------------------------------------------------
   if (!convention.allowedActorTypes.includes(record.actor_type as ActorType)) {
-    push(
-      "actor_type",
-      "actor_type",
-      `actor_type '${record.actor_type}' is not allowed for '${record.event_type}'`,
-      convention.allowedActorTypes.join("|"),
-      String(record.actor_type),
-    );
+    push("actor_type", "actor_type", `actor_type '${record.actor_type}' is not allowed for '${record.event_type}'`, convention.allowedActorTypes.join("|"), String(record.actor_type));
   }
 
   // --- object binding --------------------------------------------------------
@@ -652,26 +822,23 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
       push("object_type", "object_type", `object_type must be null for '${record.event_type}'`, "null", String(record.object_type));
     }
   } else if (oc.objectType === ANY_OBJECT_TYPE) {
-    if (!isNonEmptyString(record.object_type)) {
-      push("object_type", "object_type", `object_type must be a non-empty string for '${record.event_type}'`, "non-empty string", typeName(record.object_type));
+    if (!isNonBlankString(record.object_type)) {
+      push("object_type", "object_type", `object_type must be a non-blank string for '${record.event_type}'`, "non-blank string", typeName(record.object_type));
     }
   } else if (record.object_type !== oc.objectType) {
     push("object_type", "object_type", `object_type must be '${oc.objectType}' for '${record.event_type}'`, oc.objectType, String(record.object_type));
   }
 
   if (oc.objectId === "required") {
-    if (!isNonEmptyString(record.object_id)) {
-      push("object_id", "object_id", `object_id must be a non-empty string for '${record.event_type}'`, "non-empty string", typeName(record.object_id));
+    if (!isNonBlankString(record.object_id)) {
+      push("object_id", "object_id", `object_id must be a non-blank string for '${record.event_type}'`, "non-blank string", typeName(record.object_id));
     }
   } else if (oc.objectId === "null") {
     if (record.object_id !== null) {
       push("object_id", "object_id", `object_id must be null for '${record.event_type}'`, "null", String(record.object_id));
     }
-  } else {
-    // optional: null or non-empty string
-    if (record.object_id !== null && !isNonEmptyString(record.object_id)) {
-      push("object_id", "object_id", `object_id must be null or a non-empty string for '${record.event_type}'`, "null | non-empty string", typeName(record.object_id));
-    }
+  } else if (record.object_id !== null && !isNonBlankString(record.object_id)) {
+    push("object_id", "object_id", `object_id must be null or a non-blank string for '${record.event_type}'`, "null | non-blank string", typeName(record.object_id));
   }
 
   // --- payload ---------------------------------------------------------------
@@ -690,12 +857,17 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
     }
   }
 
-  // --- venture references (must be non-empty strings when present) ------------
+  // --- venture references (must be non-blank strings when present) ------------
   for (const path of convention.ventureReferencePaths) {
     const v = readPath(record, path);
-    if (v !== undefined && v !== null && !isNonEmptyString(v)) {
-      push("venture_reference", path, `declared venture reference '${path}' must be a non-empty string when present`, "non-empty string", typeName(v));
+    if (v !== undefined && v !== null && !isNonBlankString(v)) {
+      push("venture_reference", path, `declared venture reference '${path}' must be a non-blank string when present`, "non-blank string", typeName(v));
     }
+  }
+
+  // --- cross-field invariants -------------------------------------------------
+  if (convention.validateInvariants) {
+    for (const e of convention.validateInvariants(record)) errors.push(e);
   }
 
   return errors;
@@ -704,30 +876,32 @@ export function validateEventConvention(record: AuditEventRecord): ConventionErr
 /**
  * The set of venture ids an event references, per the conventions: the universal
  * `object_type='venture'` rule plus every declared `ventureReferencePath` that
- * holds a non-empty string. NOT a recursive scan of arbitrary payload strings —
- * only the declared binding points count, so an unrelated payload string that
- * happens to equal a venture id is never treated as a reference.
+ * holds a non-blank string. NOT a recursive scan of arbitrary payload strings —
+ * only the declared binding points count.
  */
 export function ventureIdsReferenced(record: AuditEventRecord): Set<string> {
   const ids = new Set<string>();
-  if (record.object_type === "venture" && isNonEmptyString(record.object_id)) {
+  if (record.object_type === "venture" && isNonBlankString(record.object_id)) {
     ids.add(record.object_id);
   }
   const convention = getConvention(record.event_type);
   if (convention) {
     for (const path of convention.ventureReferencePaths) {
       const v = readPath(record, path);
-      if (isNonEmptyString(v)) ids.add(v);
+      if (isNonBlankString(v)) ids.add(v);
     }
   }
   return ids;
 }
 
-// --- deterministic docs table renderer ---------------------------------------
+// --- deterministic docs renderers --------------------------------------------
 
-/** Markdown markers the docs-drift guard uses to locate the conventions table. */
+/** Markers the docs-drift guard uses to locate the summary table. */
 export const CONVENTIONS_TABLE_START = "<!-- AUDIT_CONVENTIONS_TABLE_START -->";
 export const CONVENTIONS_TABLE_END = "<!-- AUDIT_CONVENTIONS_TABLE_END -->";
+/** Markers the docs-drift guard uses to locate the full contracts section. */
+export const CONVENTIONS_CONTRACTS_START = "<!-- AUDIT_CONVENTIONS_CONTRACTS_START -->";
+export const CONVENTIONS_CONTRACTS_END = "<!-- AUDIT_CONVENTIONS_CONTRACTS_END -->";
 
 function cell(v: string): string {
   return v.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
@@ -756,17 +930,88 @@ function payloadCell(c: EventConvention): string {
 }
 
 /**
- * Render the canonical Phase 0 event-conventions table (deterministic order).
- * `docs/AUDIT_CONVENTIONS.md` embeds exactly this between the table markers, and
- * `pnpm check:audit` fails if the two ever diverge. `?` marks an optional field.
+ * Render the canonical Phase 0 event-conventions SUMMARY table (deterministic
+ * order) — the human quick-reference. The FULL machine-readable contract lives
+ * in `renderConventionsContracts()`. `?` marks an optional payload field.
  */
 export function renderConventionsTable(): string {
   const header =
-    "| Event type | Issue | Owner module | Actor types | Object (type / id) | Payload fields | Description |\n" +
-    "|---|---|---|---|---|---|---|";
+    "| Event type | Issue | Owner module | Actor types | Object (type / id) | Payload fields | Invariants | Description |\n" +
+    "|---|---|---|---|---|---|---|---|";
   const rows = EVENT_CONVENTIONS.map(
     (c) =>
-      `| \`${cell(c.eventType)}\` | #${c.introducedByIssue} | \`${cell(c.ownerModule)}\` | ${actorCell(c)} | ${objectCell(c)} | ${payloadCell(c)} | ${cell(c.description)} |`,
+      `| \`${cell(c.eventType)}\` | #${c.introducedByIssue} | \`${cell(c.ownerModule)}\` | ${actorCell(c)} | ${objectCell(c)} | ${payloadCell(c)} | ${c.invariants.length} | ${cell(c.description)} |`,
   );
   return [header, ...rows].join("\n");
+}
+
+// --- full contract renderer (type/enum/pattern/nullability/variants) ---------
+
+/** Recursively rebuild a value with object keys sorted — for a stable render. */
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      out[k] = sortKeysDeep((value as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** The complete machine-readable contract of one event (order-independent). */
+function contractObject(c: EventConvention): Record<string, unknown> {
+  return {
+    eventType: c.eventType,
+    issue: c.introducedByIssue,
+    ownerModule: c.ownerModule,
+    allowedActorTypes: [...c.allowedActorTypes],
+    objectContract: { objectType: c.objectContract.objectType, objectId: c.objectContract.objectId },
+    payloadSchema: c.payloadSchema, // full JSON Schema: types, enums, patterns, nullability, required, additionalProperties
+    ventureReferencePaths: [...c.ventureReferencePaths],
+    invariants: [...c.invariants],
+  };
+}
+
+/** Compact canonical JSON (sorted keys) of a value — used for the digest. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortKeysDeep(value));
+}
+
+/** Pretty, sorted-key JSON of a value — human-readable and deterministic. */
+function prettyJson(value: unknown): string {
+  return JSON.stringify(sortKeysDeep(value), null, 2);
+}
+
+/**
+ * A SHA-256 over the canonical contract DEFINITIONS (documentation) — NOT an
+ * event hash. Any change to a type, enum, pattern, nullability, required/optional
+ * status, object binding, venture path, variant, or invariant changes it.
+ */
+export function contractsDigest(): string {
+  const canonical = EVENT_CONVENTIONS.map((c) => canonicalJson(contractObject(c))).join("\n");
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
+/**
+ * Render the FULL contracts section: one canonical JSON block per event
+ * (deterministic key order) plus the contracts digest. `docs/AUDIT_CONVENTIONS.md`
+ * embeds exactly this between the contracts markers, and `pnpm check:audit` fails
+ * if the two ever diverge — so a change to any field type, enum, pattern,
+ * nullability, required/optional status, variant, or invariant fails CI until the
+ * doc is regenerated.
+ */
+export function renderConventionsContracts(): string {
+  const lines: string[] = [];
+  for (const c of EVENT_CONVENTIONS) {
+    lines.push(`#### \`${c.eventType}\``);
+    lines.push("");
+    lines.push("```json");
+    lines.push(prettyJson(contractObject(c)));
+    lines.push("```");
+    lines.push("");
+  }
+  lines.push(`**Contracts digest (SHA-256 of the canonical contract definitions):** \`${contractsDigest()}\``);
+  return lines.join("\n");
 }

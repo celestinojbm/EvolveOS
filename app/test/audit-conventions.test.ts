@@ -26,16 +26,22 @@ import {
   validateEventConvention,
   ventureIdsReferenced,
   renderConventionsTable,
+  renderConventionsContracts,
+  contractsDigest,
   getConvention,
   isValidEventTimestamp,
+  isNonBlankString,
   EVENT_TYPES,
   EVENT_CONVENTIONS,
   ANY_OBJECT_TYPE,
+  MAX_SAFE_GENERATION,
   type AuditEventRecord,
 } from "../src/lib/audit-conventions.js";
 import {
-  scanEmittedEventTypes,
+  analyzeEmitters,
+  readProductiveSources,
   extractDocTable,
+  extractDocContracts,
   computeDrift,
 } from "../../ops/check-audit-conventions.js";
 import { appendEvent, computeHash } from "../src/lib/eventlog.js";
@@ -65,6 +71,64 @@ function mkEvent(overrides: Partial<AuditEventRecord>): AuditEventRecord {
     trace_id: null,
     ...overrides,
   };
+}
+
+/** A fully valid G-01 gate_passed (actor is the approver). */
+function validG01(payloadOver: Record<string, unknown> = {}, over: Partial<AuditEventRecord> = {}): AuditEventRecord {
+  return mkEvent({
+    event_type: "gate_passed", actor_id: "appr", object_type: "venture", object_id: "V-1",
+    payload: {
+      gate_id: "G-01", gate_name: "Opportunity Intake", dr_id: "DR-1", approval_event_id: "EV-a",
+      proposer_actor_id: "prop", approver_actor_id: "appr", kill_criteria: ["k"], reversibility_class: "R1",
+      dr_digest: HEX64, transition_kind: "gate_pass", from_state: null, to_state: "trend_analysis",
+      venture_id: "V-1", effect: "venture_created", opportunity_ref: "KI-1", ...payloadOver,
+    },
+    ...over,
+  });
+}
+
+/** A fully valid pipeline (G-03) gate_passed. */
+function validPipeline(payloadOver: Record<string, unknown> = {}, over: Partial<AuditEventRecord> = {}): AuditEventRecord {
+  return mkEvent({
+    event_type: "gate_passed", actor_id: "appr", object_type: "venture", object_id: "V-1",
+    payload: {
+      gate_id: "G-03", gate_name: "Validation", dr_id: "DR-1", approval_event_id: "EV-a",
+      proposer_actor_id: "prop", approver_actor_id: "appr", kill_criteria: ["k"], reversibility_class: "R2",
+      dr_digest: HEX64, transition_kind: "gate_pass", from_state: "validation", to_state: "analysis",
+      venture_id: "V-1", effect: "stage_advanced", ...payloadOver,
+    },
+    ...over,
+  });
+}
+
+/** A fully valid standing (G-17) gate_passed (object is the subject). */
+function validStanding(payloadOver: Record<string, unknown> = {}, over: Partial<AuditEventRecord> = {}): AuditEventRecord {
+  return mkEvent({
+    event_type: "gate_passed", actor_id: "appr", object_type: "campaign", object_id: "camp-1",
+    payload: {
+      gate_id: "G-17", gate_name: "Public Communication", dr_id: "DR-1", approval_event_id: "EV-a",
+      proposer_actor_id: "prop", approver_actor_id: "appr", kill_criteria: null, reversibility_class: "R3",
+      dr_digest: HEX64, transition_kind: "authorization", from_state: null, to_state: null,
+      venture_id: null, subject_type: "campaign", subject_id: "camp-1", ...payloadOver,
+    },
+    ...over,
+  });
+}
+
+/** A fully valid decision-record approval. */
+function validApprovalDR(payloadOver: Record<string, unknown> = {}, over: Partial<AuditEventRecord> = {}): AuditEventRecord {
+  return mkEvent({
+    event_type: "approval.recorded", actor_id: "appr", object_type: "decision-record", object_id: "DR-1",
+    payload: { proposer_actor_id: "prop", object_digest: HEX64, ...payloadOver },
+    ...over,
+  });
+}
+
+/** Delete a key from a copied payload (for "field must be absent" tests). */
+function withoutKey(rec: AuditEventRecord, key: string): AuditEventRecord {
+  const p = { ...(rec.payload as Record<string, unknown>) };
+  delete p[key];
+  return { ...rec, payload: p };
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +256,130 @@ describe("validateEventConvention — unknown types and contracts", () => {
   });
 });
 
+const BLANKS = ["", " ", "\t", "\n", " \t "];
+
+describe("validateEventConvention — non-blank strings (reject whitespace-only)", () => {
+  it("isNonBlankString rejects every blank form", () => {
+    for (const b of BLANKS) expect(isNonBlankString(b)).toBe(false);
+    expect(isNonBlankString("x")).toBe(true);
+    expect(isNonBlankString(" x ")).toBe(true);
+  });
+
+  it.each(BLANKS)("rejects a blank id %j", (blank) => {
+    expect(validateEventConvention(mkEvent({ id: blank })).some((e) => e.path === "id")).toBe(true);
+  });
+  it.each(BLANKS)("rejects a blank actor_id %j", (blank) => {
+    expect(validateEventConvention(mkEvent({ actor_id: blank })).some((e) => e.path === "actor_id")).toBe(true);
+  });
+  it.each(BLANKS)("rejects a blank required object_id %j", (blank) => {
+    expect(validateEventConvention(mkEvent({ object_id: blank })).some((e) => e.category === "object_id")).toBe(true);
+  });
+  it.each(BLANKS)("rejects a blank trace_id %j (when not null)", (blank) => {
+    expect(validateEventConvention(mkEvent({ trace_id: blank })).some((e) => e.path === "trace_id")).toBe(true);
+  });
+  it.each(BLANKS)("rejects a blank payload string field %j (display_name)", (blank) => {
+    expect(validateEventConvention(mkEvent({ payload: { display_name: blank } })).some((e) => e.category === "payload_schema")).toBe(true);
+  });
+  it.each(BLANKS)("rejects a blank session_id %j in a stop event", (blank) => {
+    const ev = mkEvent({ event_type: "system.stop_engaged", object_type: "system-stop", object_id: "system", payload: { generation: 1, reason: null, session_id: blank } });
+    expect(validateEventConvention(ev).some((e) => e.category === "payload_schema")).toBe(true);
+  });
+});
+
+describe("validateEventConvention — impossible events (invariants) with a valid hash", () => {
+  it("the valid variants pass cleanly", () => {
+    expect(validateEventConvention(validG01())).toEqual([]);
+    expect(validateEventConvention(validPipeline())).toEqual([]);
+    expect(validateEventConvention(validStanding())).toEqual([]);
+    expect(validateEventConvention(validApprovalDR())).toEqual([]);
+  });
+
+  // approval.recorded
+  it("rejects a decision-record approval with a null digest", () => {
+    const errs = validateEventConvention(validApprovalDR({ object_digest: null }));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.object_digest")).toBe(true);
+  });
+  it("rejects an approval whose approver equals the proposer", () => {
+    const errs = validateEventConvention(validApprovalDR({ proposer_actor_id: "appr" }));
+    expect(errs.some((e) => e.category === "invariant" && /differ from the proposer/.test(e.message))).toBe(true);
+  });
+  it("rejects an approval with a whitespace-only proposer", () => {
+    expect(validateEventConvention(validApprovalDR({ proposer_actor_id: "  " })).some((e) => e.category === "payload_schema")).toBe(true);
+  });
+
+  // gate_passed — G-01
+  it("rejects G-01 with no opportunity_ref", () => {
+    const errs = validateEventConvention(withoutKey(validG01(), "opportunity_ref"));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.opportunity_ref")).toBe(true);
+  });
+  it("rejects G-01 carrying subject fields", () => {
+    const errs = validateEventConvention(validG01({ subject_type: "campaign", subject_id: "x" }));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.subject_type")).toBe(true);
+  });
+  it("rejects G-01 whose object_id differs from payload.venture_id", () => {
+    const errs = validateEventConvention(validG01({}, { object_id: "V-other" }));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "object_id")).toBe(true);
+  });
+
+  // gate_passed — pipeline
+  it("rejects a pipeline gate with no effect", () => {
+    const errs = validateEventConvention(withoutKey(validPipeline(), "effect"));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.effect")).toBe(true);
+  });
+  it("rejects a pipeline gate whose object_id differs from venture_id", () => {
+    expect(validateEventConvention(validPipeline({}, { object_id: "V-x" })).some((e) => e.path === "object_id")).toBe(true);
+  });
+
+  // gate_passed — standing
+  it("rejects a standing gate carrying an effect", () => {
+    const errs = validateEventConvention(validStanding({ effect: "venture_created" }));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.effect")).toBe(true);
+  });
+  it("rejects a standing gate with no subject fields", () => {
+    const errs = validateEventConvention(withoutKey(withoutKey(validStanding(), "subject_type"), "subject_id"));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.subject_type")).toBe(true);
+  });
+  it("rejects a standing gate whose object type/id differ from the subject", () => {
+    expect(validateEventConvention(validStanding({}, { object_type: "other" })).some((e) => e.path === "object_type")).toBe(true);
+    expect(validateEventConvention(validStanding({}, { object_id: "other" })).some((e) => e.path === "object_id")).toBe(true);
+  });
+  it("rejects an authorization with a non-null from/to state", () => {
+    expect(validateEventConvention(validStanding({ from_state: "x" })).some((e) => e.path === "payload.from_state")).toBe(true);
+    expect(validateEventConvention(validStanding({ to_state: "x" })).some((e) => e.path === "payload.to_state")).toBe(true);
+  });
+
+  // gate_passed — actor/proposer/scope
+  it("rejects a gate pass whose actor is not the approver", () => {
+    const errs = validateEventConvention(validPipeline({}, { actor_id: "someone-else" }));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "actor_id")).toBe(true);
+  });
+  it("rejects a gate pass whose proposer equals the approver", () => {
+    const errs = validateEventConvention(validPipeline({ proposer_actor_id: "appr" }));
+    expect(errs.some((e) => e.category === "invariant" && /proposer and approver must differ/.test(e.message))).toBe(true);
+  });
+  it("rejects an unimplemented gate id", () => {
+    const errs = validateEventConvention(validPipeline({ gate_id: "G-09" }));
+    expect(errs.some((e) => e.category === "invariant" && e.path === "payload.gate_id")).toBe(true);
+  });
+
+  // ratification + stop generation
+  it("rejects a ratification signature whose actor is not the signer", () => {
+    const ev = mkEvent({
+      event_type: "ratification.signature_recorded", actor_id: "someone", object_type: "founding-ratification-pack", object_id: "FRP-2026-1",
+      payload: { pack_digest: HEX64, pack_version: "1.0.0", signer_actor_id: "signer", signer_capacity: "operator", acknowledgement_version: "1.0.0", session_id: "s" },
+    });
+    expect(validateEventConvention(ev).some((e) => e.category === "invariant" && e.path === "payload.signer_actor_id")).toBe(true);
+  });
+  it("rejects a stop generation beyond MAX_SAFE_INTEGER, 0, or non-integer", () => {
+    const stop = (gen: unknown) => mkEvent({ event_type: "system.stop_engaged", object_type: "system-stop", object_id: "system", payload: { generation: gen, reason: null, session_id: "s" } });
+    expect(validateEventConvention(stop(MAX_SAFE_GENERATION))).toEqual([]);
+    expect(validateEventConvention(stop(MAX_SAFE_GENERATION + 1)).some((e) => e.category === "payload_schema")).toBe(true);
+    expect(validateEventConvention(stop(0)).some((e) => e.category === "payload_schema")).toBe(true);
+    expect(validateEventConvention(stop(1.5)).some((e) => e.category === "payload_schema")).toBe(true);
+    expect(validateEventConvention(stop("1")).some((e) => e.category === "payload_schema")).toBe(true);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 2. Registry shape + venture references
 // ---------------------------------------------------------------------------
@@ -207,14 +395,25 @@ describe("registry", () => {
     expect(issues).toEqual([...issues].sort((a, b) => a - b));
   });
 
-  it("renders a stable table across calls", () => {
+  it("renders a stable table, contracts, and digest across calls", () => {
     expect(renderConventionsTable()).toBe(renderConventionsTable());
+    expect(renderConventionsContracts()).toBe(renderConventionsContracts());
+    expect(contractsDigest()).toMatch(/^[0-9a-f]{64}$/);
+    expect(contractsDigest()).toBe(contractsDigest());
+    // the digest appears verbatim in the rendered contracts section
+    expect(renderConventionsContracts()).toContain(contractsDigest());
   });
 
   it("gate_passed uses the caller-supplied object sentinel and declares payload.venture_id", () => {
     const c = getConvention("gate_passed")!;
     expect(c.objectContract.objectType).toBe(ANY_OBJECT_TYPE);
     expect(c.ventureReferencePaths).toContain("payload.venture_id");
+  });
+
+  it("every convention that declares invariants ships a validator (and vice versa)", () => {
+    for (const c of EVENT_CONVENTIONS) {
+      expect(c.invariants.length > 0).toBe(Boolean(c.validateInvariants));
+    }
   });
 });
 
@@ -588,6 +787,64 @@ describe("CLI verify — valid-hash convention violations", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 5b. Impossible events with a VALID hash, rejected by the REAL CLI (exit 1)
+// ---------------------------------------------------------------------------
+
+describe("CLI verify — impossible events with a valid hash (real CLI)", () => {
+  let admin: pg.Client;
+  let db: pg.Client;
+  let url: string;
+  const dbName = `evolveos_imposs_${runId}`;
+
+  beforeAll(async () => {
+    admin = new pg.Client({ connectionString: DATABASE_URL });
+    await admin.connect();
+    url = await makeTempDb(admin, dbName);
+    db = new pg.Client({ connectionString: url });
+    await db.connect();
+  }, 60_000);
+  afterAll(async () => {
+    if (db) await db.end();
+    await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
+    await admin.end();
+  });
+
+  // Append the record's content via appendEvent — a correctly recomputed hash,
+  // so ONLY the convention/invariant can fail (never hash/link).
+  async function append(rec: AuditEventRecord, id: string): Promise<void> {
+    await appendEvent(db, {
+      id,
+      timestamp: rec.timestamp,
+      actor_type: rec.actor_type as "human",
+      actor_id: rec.actor_id,
+      event_type: rec.event_type,
+      object_type: rec.object_type,
+      object_id: rec.object_id,
+      payload: rec.payload,
+    });
+  }
+
+  it("detects G-01 without opportunity_ref, a standing gate with an effect, a null-digest DR approval, and actor≠approver (exit 1)", async () => {
+    await append(withoutKey(validG01(), "opportunity_ref"), `EV-i1-${runId}`);
+    await append(validStanding({ effect: "venture_created" }), `EV-i2-${runId}`);
+    await append(validApprovalDR({ object_digest: null }), `EV-i3-${runId}`);
+    await append(validPipeline({}, { actor_id: "not-approver" }), `EV-i4-${runId}`);
+
+    const r = runCli(["verify"], url);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/category=invariant/);
+    expect(r.stderr).toMatch(/path=payload\.opportunity_ref/);
+    expect(r.stderr).toMatch(/path=payload\.effect/);
+    expect(r.stderr).toMatch(/path=payload\.object_digest/);
+    expect(r.stderr).toMatch(/path=actor_id/);
+    // extract must also refuse over this now-invalid chain
+    const ex = runCli(["extract"], url);
+    expect(ex.code).toBe(1);
+    expect(ex.stdout).not.toMatch(/^seq \d+$/m);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 6. Snapshot isolation (an uncommitted append is invisible to verify)
 // ---------------------------------------------------------------------------
 
@@ -654,69 +911,137 @@ describe("CLI verify — snapshot isolation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Drift guard (registry ⇄ writers ⇄ docs)
+// 7. Drift guard — AST emitter analysis + owner-aware drift (registry ⇄ writers ⇄ docs)
 // ---------------------------------------------------------------------------
 
+const REAL_REGISTRY = EVENT_CONVENTIONS.map((c) => ({ eventType: c.eventType, ownerModule: c.ownerModule }));
+/** Emitters exactly matching the registry (each type by its owner) — the clean case. */
+function cleanEmitters(): Map<string, Set<string>> {
+  return new Map(EVENT_CONVENTIONS.map((c) => [c.eventType, new Set([c.ownerModule])]));
+}
+const DOC_MD = readFileSync(join(REPO_ROOT, "docs", "AUDIT_CONVENTIONS.md"), "utf8");
+
+describe("AST emitter analysis", () => {
+  it("maps every registered type to EXACTLY its single owner module (real scan)", async () => {
+    const { emitters, unresolved } = analyzeEmitters(await readProductiveSources());
+    expect(unresolved).toEqual([]);
+    expect([...emitters.keys()].sort()).toEqual([...EVENT_TYPES].sort());
+    for (const c of EVENT_CONVENTIONS) {
+      expect([...(emitters.get(c.eventType) ?? [])]).toEqual([c.ownerModule]);
+    }
+  });
+
+  it("resolves a direct sink literal, a *_EVENT_TYPE constant, and a funnel-helper call", () => {
+    const { emitters, unresolved } = analyzeEmitters([
+      {
+        file: "app/src/lib/fixture.ts",
+        text: `
+          const RATIFICATION_EVENT_TYPE = "ratification.signature_recorded";
+          async function log(c, args) { await appendEventTx(c, { event_type: args.eventType }); }
+          export async function a(c) { await appendEventTx(c, { event_type: "gate_passed" }); }
+          export async function b(c) { await appendEventTx(c, { event_type: RATIFICATION_EVENT_TYPE }); }
+          export async function d(c) { await log(c, { eventType: "user.created" }); }
+        `,
+      },
+    ]);
+    expect(unresolved).toEqual([]);
+    expect(emitters.get("gate_passed")).toEqual(new Set(["app/src/lib/fixture.ts"]));
+    expect(emitters.get("ratification.signature_recorded")).toEqual(new Set(["app/src/lib/fixture.ts"]));
+    expect(emitters.get("user.created")).toEqual(new Set(["app/src/lib/fixture.ts"]));
+  });
+
+  it("does NOT count an event-type literal that is not in an emission position", () => {
+    const { emitters } = analyzeEmitters([
+      { file: "app/src/lib/x.ts", text: `const notEmitted = { eventType: "user.created", note: "just data" };` },
+    ]);
+    expect(emitters.size).toBe(0);
+  });
+
+  it("reports a dynamic / non-resolvable event_type as unresolved", () => {
+    const { unresolved } = analyzeEmitters([
+      { file: "app/src/lib/x.ts", text: `export async function f(c, kind) { await appendEventTx(c, { event_type: kind + "!" }); }` },
+    ]);
+    expect(unresolved.length).toBe(1);
+    expect(unresolved[0].file).toBe("app/src/lib/x.ts");
+  });
+});
+
 describe("check-audit-conventions drift guard", () => {
-  it("the real productive scan equals the registry set", async () => {
-    const emitted = await scanEmittedEventTypes(join(REPO_ROOT, "app", "src"));
-    expect([...emitted].sort()).toEqual([...EVENT_TYPES].sort());
+  it("the real docs table and full contracts equal the renderers", () => {
+    expect(extractDocTable(DOC_MD)).toBe(renderConventionsTable());
+    expect(extractDocContracts(DOC_MD)).toBe(renderConventionsContracts());
   });
 
-  it("the real docs table equals renderConventionsTable()", () => {
-    const md = readFileSync(join(REPO_ROOT, "docs", "AUDIT_CONVENTIONS.md"), "utf8");
-    expect(extractDocTable(md)).toBe(renderConventionsTable());
-  });
-
-  it("computeDrift is clean for the real sources", () => {
-    const md = readFileSync(join(REPO_ROOT, "docs", "AUDIT_CONVENTIONS.md"), "utf8");
+  it("computeDrift is clean for the real sources", async () => {
+    const { emitters, unresolved } = analyzeEmitters(await readProductiveSources());
     const problems = computeDrift({
-      registryTypes: EVENT_TYPES,
-      emittedTypes: new Set(EVENT_TYPES),
-      docTable: extractDocTable(md),
+      registry: REAL_REGISTRY,
+      emitters,
+      unresolved,
+      docTable: extractDocTable(DOC_MD),
       expectedTable: renderConventionsTable(),
+      docContracts: extractDocContracts(DOC_MD),
+      expectedContracts: renderConventionsContracts(),
     });
     expect(problems).toEqual([]);
   });
 
-  it("flags an unregistered productive writer (fixture)", () => {
-    const problems = computeDrift({
-      registryTypes: EVENT_TYPES,
-      emittedTypes: new Set([...EVENT_TYPES, "rogue.new_event"]),
+  function driftWith(over: Partial<Parameters<typeof computeDrift>[0]>): string[] {
+    return computeDrift({
+      registry: REAL_REGISTRY,
+      emitters: cleanEmitters(),
+      unresolved: [],
       docTable: renderConventionsTable(),
       expectedTable: renderConventionsTable(),
+      docContracts: renderConventionsContracts(),
+      expectedContracts: renderConventionsContracts(),
+      ...over,
     });
-    expect(problems.some((p) => /rogue\.new_event.*NOT in the registry/.test(p))).toBe(true);
+  }
+
+  it("fails when a SECOND module emits system.stop_engaged (fixture)", () => {
+    const emitters = cleanEmitters();
+    emitters.get("system.stop_engaged")!.add("app/src/lib/rogue.ts");
+    const problems = driftWith({ emitters });
+    expect(problems.some((p) => /system\.stop_engaged.*emitted by 'app\/src\/lib\/rogue\.ts'.*only the owner/.test(p))).toBe(true);
   });
 
-  it("flags a registered type with no writer (fixture)", () => {
-    const problems = computeDrift({
-      registryTypes: [...EVENT_TYPES, "ghost.type"],
-      emittedTypes: new Set(EVENT_TYPES),
-      docTable: renderConventionsTable(),
-      expectedTable: renderConventionsTable(),
-    });
-    expect(problems.some((p) => /ghost\.type.*NO productive writer/.test(p))).toBe(true);
+  it("fails when a second module emits user.created (fixture)", () => {
+    const emitters = cleanEmitters();
+    emitters.get("user.created")!.add("app/src/lib/other.ts");
+    expect(driftWith({ emitters }).some((p) => /user\.created.*owner is 'app\/src\/lib\/auth\.ts'/.test(p))).toBe(true);
   });
 
-  it("flags a docs table that drifts from the registry (fixture)", () => {
-    const problems = computeDrift({
-      registryTypes: EVENT_TYPES,
-      emittedTypes: new Set(EVENT_TYPES),
-      docTable: "| Event type |\n|---|\n| `made.up` |",
-      expectedTable: renderConventionsTable(),
-    });
-    expect(problems.some((p) => /does not match renderConventionsTable/.test(p))).toBe(true);
-    expect(problems.some((p) => /made\.up.*not in the registry/.test(p))).toBe(true);
+  it("fails on an unregistered emitted type (fixture)", () => {
+    const emitters = cleanEmitters();
+    emitters.set("rogue.new_event", new Set(["app/src/lib/rogue.ts"]));
+    expect(driftWith({ emitters }).some((p) => /rogue\.new_event.*NOT in the registry/.test(p))).toBe(true);
   });
 
-  it("flags missing table markers (fixture)", () => {
-    const problems = computeDrift({
-      registryTypes: EVENT_TYPES,
-      emittedTypes: new Set(EVENT_TYPES),
-      docTable: null,
-      expectedTable: renderConventionsTable(),
-    });
-    expect(problems.some((p) => /table markers/.test(p))).toBe(true);
+  it("fails on a registered type with no writer (fixture)", () => {
+    const emitters = cleanEmitters();
+    emitters.delete("venture.killed");
+    expect(driftWith({ emitters }).some((p) => /venture\.killed.*NO productive writer/.test(p))).toBe(true);
+  });
+
+  it("fails on an unresolved productive emission (fixture)", () => {
+    const problems = driftWith({ unresolved: [{ file: "app/src/lib/x.ts", line: 9, detail: "non-resolvable event_type" }] });
+    expect(problems.some((p) => /app\/src\/lib\/x\.ts:9.*non-resolvable/.test(p))).toBe(true);
+  });
+
+  it("fails when the docs summary table drifts (fixture)", () => {
+    expect(driftWith({ docTable: "| Event type |\n|---|\n| `made.up` |" }).some((p) => /summary table does not match/.test(p))).toBe(true);
+  });
+
+  it("fails when the full contracts section drifts, even with the same field names (fixture)", () => {
+    // Take the real contracts and flip one field's type int→string (generation),
+    // keeping every field NAME identical — a names-only check would miss this.
+    const mutated = renderConventionsContracts().replace('"type": "integer"', '"type": "string"');
+    expect(mutated).not.toBe(renderConventionsContracts());
+    expect(driftWith({ docContracts: mutated }).some((p) => /full contracts section does not match/.test(p))).toBe(true);
+  });
+
+  it("fails when the contracts markers are missing (fixture)", () => {
+    expect(driftWith({ docContracts: null }).some((p) => /contracts markers/.test(p))).toBe(true);
   });
 });
