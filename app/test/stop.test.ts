@@ -38,6 +38,12 @@ import { createUser, grantRole, startSession, endSession, type Role } from "../s
 import { passPipelineGate, passStandingGate, passGate } from "../src/lib/gates.js";
 import { appendEvent, verifyChainInDb } from "../src/lib/eventlog.js";
 import { setupActors, fileDR, approveDR, ventureTo, mintVenture, type Actors } from "./helpers.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+
+const MIGRATION_0007 = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "ops", "migrations", "0007_system_stop.sql");
+const MAX = Number.MAX_SAFE_INTEGER; // 9007199254740991
 
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/evolveos";
@@ -546,10 +552,19 @@ describe("G-00 stop — projection↔event corruption fails closed (isolated DB)
     await expectFailsClosed();
   });
 
-  it("a projection generation past the safe integer range → corrupt", async () => {
+  it("a projection generation past the safe integer range → corrupt (read-level defense)", async () => {
+    // The DB constraint normally blocks this; drop it to prove the read layer ALSO
+    // fails closed (defense in depth), then restore it.
     const id = await forge(STOP_EVENT_TYPE, { generation: 945, reason: null, session_id: "s" });
-    await setProjection(true, "9007199254740992", id, null);
-    await expectFailsClosed();
+    await gc.query("ALTER TABLE system_stop_state DROP CONSTRAINT system_stop_state_gen_safe");
+    try {
+      await setProjection(true, "9007199254740992", id, null);
+      await expectFailsClosed();
+    } finally {
+      await gc.query("DELETE FROM system_stop_state");
+      await gc.query("INSERT INTO system_stop_state (singleton, is_stopped, generation) VALUES (TRUE, FALSE, 0)");
+      await gc.query("ALTER TABLE system_stop_state ADD CONSTRAINT system_stop_state_gen_safe CHECK (generation >= 0 AND generation <= 9007199254740991)");
+    }
   });
 
   it("a restart that releases a stop that is NOT the immediately-preceding one → corrupt", async () => {
@@ -628,6 +643,148 @@ describe("G-00 stop — DB-level integrity", () => {
     await expect(
       client.query("UPDATE system_stop_state SET is_stopped = TRUE, generation = 1, current_event_id = 'EV-nope', actor_id = 'x' WHERE singleton = TRUE"),
     ).rejects.toThrow(/foreign key|current_event_id/i);
+  });
+});
+
+describe("G-00 stop — generation exhaustion & the safe-integer bound (isolated DB)", () => {
+  let admin: pg.Client;
+  let gc: pg.Client;
+  const dbName = `evolveos_maxgen_${runId}`;
+  let operator: Human;
+  let approver: Human;
+
+  beforeAll(async () => {
+    admin = new pg.Client({ connectionString: DATABASE_URL });
+    await admin.connect();
+    const url = await makeTempDb(admin, dbName);
+    gc = new pg.Client({ connectionString: url });
+    await gc.connect();
+    operator = await makeHuman(gc, "max-op", ["operator"]);
+    approver = await makeHuman(gc, "max-appr", ["approver"]);
+  });
+  afterAll(async () => {
+    if (gc) await gc.end();
+    await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
+    await admin.end();
+  });
+
+  async function forgeEvent(eventType: string, actorId: string, payload: Record<string, unknown>): Promise<string> {
+    const ev = await appendEvent(gc, {
+      id: `EV-forge-${runId}-${seq++}`,
+      timestamp: new Date().toISOString(),
+      actor_type: "human",
+      actor_id: actorId,
+      event_type: eventType,
+      object_type: STOP_OBJECT_TYPE,
+      object_id: STOP_OBJECT_ID,
+      payload,
+    });
+    return ev.id;
+  }
+  async function setProjection(isStopped: boolean, generation: number, eventId: string, actorId: string, reason: string | null): Promise<void> {
+    await gc.query("DELETE FROM system_stop_state");
+    await gc.query(
+      "INSERT INTO system_stop_state (singleton, is_stopped, generation, current_event_id, actor_id, reason) VALUES (TRUE, $1, $2, $3, $4, $5)",
+      [isStopped, generation, eventId, actorId, reason],
+    );
+  }
+
+  it("engaging a stop from a valid running state at MAX generation is refused; nothing is written", async () => {
+    // Coherent running state at MAX: restart(gen MAX) releasing stop(gen MAX-1).
+    const s = await forgeEvent(STOP_EVENT_TYPE, operator.actorId, { generation: MAX - 1, reason: null, session_id: "s" });
+    const r = await forgeEvent(RESTART_EVENT_TYPE, approver.actorId, { generation: MAX, rationale: "x", session_id: "s", released_stop_event_id: s });
+    await setProjection(false, MAX, r, approver.actorId, "x");
+    // The state validates correctly at MAX.
+    const st = await getSystemStopState(gc);
+    expect(st.isStopped).toBe(false);
+    expect(st.generation).toBe(MAX);
+
+    const beforeStops = await countEvents(gc, STOP_EVENT_TYPE);
+    await expect(stop(gc, operator)).rejects.toThrow(StopStateCorruptError);
+    expect(await countEvents(gc, STOP_EVENT_TYPE)).toBe(beforeStops); // no new event
+    const after = await getSystemStopState(gc);
+    expect(after.generation).toBe(MAX); // projection unchanged
+    expect(after.isStopped).toBe(false);
+    expect((await verifyChainInDb(gc)).ok).toBe(true);
+  });
+
+  it("releasing from a valid stopped state at MAX generation is refused before any event", async () => {
+    const s = await forgeEvent(STOP_EVENT_TYPE, operator.actorId, { generation: MAX, reason: null, session_id: "s" });
+    await setProjection(true, MAX, s, operator.actorId, null);
+    const st = await getSystemStopState(gc);
+    expect(st.isStopped).toBe(true);
+    expect(st.generation).toBe(MAX);
+
+    const beforeRestarts = await countEvents(gc, RESTART_EVENT_TYPE);
+    await expect(restart(gc, approver)).rejects.toThrow(StopStateCorruptError);
+    expect(await countEvents(gc, RESTART_EVENT_TYPE)).toBe(beforeRestarts);
+    const after = await getSystemStopState(gc);
+    expect(after.generation).toBe(MAX);
+    expect(after.isStopped).toBe(true);
+    expect((await verifyChainInDb(gc)).ok).toBe(true);
+  });
+
+  it("the SQL constraint rejects a generation past MAX but allows MAX", async () => {
+    // A coherent stopped row to update (a real stop event exists at gen MAX).
+    const s = await forgeEvent(STOP_EVENT_TYPE, operator.actorId, { generation: MAX, reason: null, session_id: "s" });
+    await setProjection(true, MAX, s, operator.actorId, null);
+    // MAX + 1 as a decimal string (never an unsafe JS number) is rejected.
+    await expect(
+      gc.query("UPDATE system_stop_state SET generation = $1 WHERE singleton = TRUE", ["9007199254740992"]),
+    ).rejects.toThrow(/system_stop_state_gen_safe/);
+    // MAX is still representable (no constraint violation).
+    await expect(
+      gc.query("UPDATE system_stop_state SET generation = $1 WHERE singleton = TRUE", ["9007199254740991"]),
+    ).resolves.toBeTruthy();
+  });
+});
+
+describe("G-00 stop — 0007 migration is idempotent and upgrades an old table (isolated DB)", () => {
+  let admin: pg.Client;
+  let gc: pg.Client;
+  const dbName = `evolveos_mig_${runId}`;
+  const sql = readFileSync(MIGRATION_0007, "utf8");
+
+  beforeAll(async () => {
+    admin = new pg.Client({ connectionString: DATABASE_URL });
+    await admin.connect();
+    const url = await makeTempDb(admin, dbName);
+    gc = new pg.Client({ connectionString: url });
+    await gc.connect();
+  });
+  afterAll(async () => {
+    if (gc) await gc.end();
+    await admin.query(`DROP DATABASE IF EXISTS ${dbName}`);
+    await admin.end();
+  });
+
+  async function hasGenSafe(): Promise<boolean> {
+    const { rows } = await gc.query("SELECT 1 FROM pg_constraint WHERE conname = 'system_stop_state_gen_safe'");
+    return rows.length > 0;
+  }
+
+  it("re-running 0007 adds the safe-integer constraint to a table that lacked it, idempotently", async () => {
+    expect(await hasGenSafe()).toBe(true); // fresh migrate already added it
+    // Simulate a table created by the earlier version of 0007 (no bound).
+    await gc.query("ALTER TABLE system_stop_state DROP CONSTRAINT system_stop_state_gen_safe");
+    expect(await hasGenSafe()).toBe(false);
+    // Re-running the migration SQL re-adds it (DO block, not CREATE TABLE).
+    await gc.query(sql);
+    expect(await hasGenSafe()).toBe(true);
+    // Running it AGAIN is a no-op (idempotent) — no error, still one constraint.
+    await gc.query(sql);
+    expect(await hasGenSafe()).toBe(true);
+    // And the re-added constraint actually rejects an overflow.
+    await gc.query(
+      "INSERT INTO events (id, timestamp, actor_type, actor_id, event_type, object_type, object_id, payload, previous_hash, hash) " +
+        "VALUES ('EV-mig','2026-07-17T00:00:00.000Z','human','u','system.stop_engaged','system-stop','system','{}'::jsonb,NULL,'h-mig')",
+    );
+    await gc.query(
+      "UPDATE system_stop_state SET is_stopped = TRUE, generation = 1, current_event_id = 'EV-mig', actor_id = 'u', reason = NULL WHERE singleton = TRUE",
+    );
+    await expect(
+      gc.query("UPDATE system_stop_state SET generation = $1 WHERE singleton = TRUE", ["9007199254740992"]),
+    ).rejects.toThrow(/system_stop_state_gen_safe/);
   });
 });
 

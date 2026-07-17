@@ -54,8 +54,24 @@ CREATE TABLE IF NOT EXISTS system_stop_state (
                 OR (is_stopped = FALSE AND reason IS NOT NULL AND length(trim(reason)) > 0)
             )
         )
-    )
+    ),
+    -- The generation must stay within the JS safe-integer range: the application
+    -- reads it as a Number and increments it (stop.ts nextGeneration), and a
+    -- BIGINT past 2^53-1 would lose precision. 9007199254740991 = MAX_SAFE_INTEGER.
+    CONSTRAINT system_stop_state_gen_safe CHECK (generation >= 0 AND generation <= 9007199254740991)
 );
+
+-- Idempotent upgrade: a database whose `system_stop_state` was created by an
+-- earlier version of THIS migration (before the safe-integer bound existed) has
+-- the table already, so CREATE TABLE IF NOT EXISTS is a no-op — add the
+-- constraint here if it is missing. Safe to run repeatedly.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'system_stop_state_gen_safe') THEN
+        ALTER TABLE system_stop_state
+            ADD CONSTRAINT system_stop_state_gen_safe CHECK (generation >= 0 AND generation <= 9007199254740991);
+    END IF;
+END $$;
 
 -- Seed the genesis RUNNING row idempotently: a second migration run is a no-op,
 -- and it never invents a stop/restart event.

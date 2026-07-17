@@ -164,6 +164,19 @@ function parseProjectionGeneration(value: unknown): number | null {
   return n;
 }
 
+/**
+ * The next generation, or a fail-closed error if it would overflow the JS
+ * safe-integer range. Called inside the transaction, after the lock and after
+ * the current state is validated, before any event/projection write — so an
+ * exhausted generation writes nothing, rolls back, and leaves the chain intact.
+ */
+function nextGeneration(current: number): number {
+  if (!Number.isSafeInteger(current) || current < 0 || current >= Number.MAX_SAFE_INTEGER) {
+    throw new StopStateCorruptError("the stop generation cannot be incremented safely (generation exhausted)");
+  }
+  return current + 1;
+}
+
 async function inStopTx<T>(client: Queryable, fn: () => Promise<T>): Promise<T> {
   await client.query("BEGIN");
   try {
@@ -201,9 +214,12 @@ async function latestTransition(client: Queryable): Promise<TransitionRow | null
 }
 
 function toState(row: StopRow): SystemStopState {
+  // Never expose a BIGINT past the safe range as a silent JS Number.
+  const generation = parseProjectionGeneration(row.generation);
+  if (generation === null) corrupt("the projection generation is not a safe non-negative integer");
   return {
     isStopped: row.is_stopped,
-    generation: Number(row.generation),
+    generation,
     currentEventId: row.current_event_id,
     actorId: row.actor_id,
     reason: row.reason,
@@ -402,7 +418,7 @@ export async function engageSystemStop(client: Queryable, input: EngageStopInput
     if (row.is_stopped) {
       return { state, eventId: row.current_event_id, idempotent: true };
     }
-    const generation = state.generation + 1;
+    const generation = nextGeneration(state.generation);
     const ev = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),
@@ -452,7 +468,7 @@ export async function releaseSystemStop(client: Queryable, input: ReleaseStopInp
     if (!row.is_stopped) {
       throw new Error("system is not stopped: there is nothing to restart");
     }
-    const generation = state.generation + 1;
+    const generation = nextGeneration(state.generation);
     const ev = await appendEventTx(client, {
       id: `EV-${randomUUID()}`,
       timestamp: new Date().toISOString(),
