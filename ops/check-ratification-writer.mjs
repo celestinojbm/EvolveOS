@@ -32,6 +32,11 @@ const repoRoot = join(here, "..");
 const WRAPPER = "app/src/lib/flags.ts";
 const CORE = "app/src/lib/ratification-core.ts";
 const OWNERS = new Set([WRAPPER, CORE]);
+// The audit-conventions registry (issue #13) DECLARES the event type name as
+// documentation/validation data — it is not a writer (it calls no appendEventTx,
+// touches no DB) — so it may name the event type. The single-writer emission
+// path stays owned by the modules above (proven by ops/check-audit-conventions).
+const AUDIT_REGISTRY = "app/src/lib/audit-conventions.ts";
 
 const RATIFICATION_EVENT_RE = /ratification\.signature_recorded/;
 const FLAG_DEF_RE =
@@ -66,7 +71,7 @@ for await (const p of walk(join(repoRoot, "app", "src"))) {
   const text = await readFile(p, "utf8");
   text.split("\n").forEach((line, i) => {
     const at = `${rel}:${i + 1}`;
-    if (!OWNERS.has(rel) && RATIFICATION_EVENT_RE.test(line)) {
+    if (!OWNERS.has(rel) && rel !== AUDIT_REGISTRY && RATIFICATION_EVENT_RE.test(line)) {
       offenders.push(`${at}: ratification signature event referenced outside the owners: ${line.trim()}`);
     }
     if (!OWNERS.has(rel) && FLAG_DEF_RE.test(line)) {

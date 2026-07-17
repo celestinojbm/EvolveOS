@@ -70,3 +70,18 @@ An **unterminated** code fence is caught as its own violation (the "no untermina
 - **Table integrity targets one failure mode.** The table check targets the high-value, low-false-positive failure — a blockquote (single- or multi-line) wedged directly between two table rows — rather than attempting full markdown-table structural validation (column-count consistency, alignment rows, etc.).
 
 These are documented gaps, not oversights: each was a conscious trade to keep the checks free of false positives so that a red build always means a real problem.
+
+## Application-side consistency guards
+
+Beyond the standard-library-Python spec checks above, the application workflow `.github/workflows/app-ci.yml` runs static guards over `app/src` and `ops` that keep the *implementation* internally consistent. They are ordinary Node/tsx scripts (they need the workspace installed), so they live in that workflow, not this one:
+
+| Guard | Script | What it enforces |
+|---|---|---|
+| Event single writer | `pnpm check:eventlog` | every `events` write goes through `app/src/lib/eventlog.ts` |
+| Gate single writer | `pnpm check:gates` | no production bypass of the gated venture primitives outside `gates.ts` |
+| DR single writer | `pnpm check:dr` | one Decision-Record store + one canonicalization/digest, in `dr.ts` |
+| Ratification single owner | `pnpm check:ratification` | `real_money` is derived, one owner; manifest ⇄ human tables agree |
+| G-00 stop single owner | `pnpm check:stop` | the stop state, its events, and its guards live only in `stop.ts` |
+| Audit conventions drift | `pnpm check:audit` | the event registry, its productive writers, and `docs/AUDIT_CONVENTIONS.md` agree (issue [#13](https://github.com/celestinojbm/EvolveOS/issues/13)) |
+
+`check:audit` is the drift guard for the **event taxonomy**: it fails if a productive module emits an event type absent from `app/src/lib/audit-conventions.ts`, if a registered type has no writer, or if the conventions table in `docs/AUDIT_CONVENTIONS.md` diverges from the registry. See [Audit Conventions](AUDIT_CONVENTIONS.md).

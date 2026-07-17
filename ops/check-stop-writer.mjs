@@ -32,6 +32,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
 
 const OWNER = "app/src/lib/stop.ts";
+// The audit-conventions registry (issue #13) DECLARES the stop event type names
+// as documentation/validation data — it is not a writer (no system_stop_state
+// write, no appendEventTx, no guard definition) — so it may name the events. All
+// the other checks below (state write, guard def, env override) still apply to
+// it; only the bare event-NAME reference is exempt.
+const AUDIT_REGISTRY = "app/src/lib/audit-conventions.ts";
 
 const STATE_WRITE_RE =
   /insert\s+into\s+system_stop_state\b|update\s+system_stop_state\b|delete\s+from\s+system_stop_state\b|truncate\s+(table\s+)?system_stop_state\b/i;
@@ -74,7 +80,7 @@ for await (const p of walk(join(repoRoot, "app", "src"))) {
     if (rel !== OWNER && STATE_WRITE_RE.test(line)) {
       offenders.push(`${at}: direct system_stop_state write outside stop.ts: ${line.trim()}`);
     }
-    if (rel !== OWNER && STOP_EVENT_RE.test(line)) {
+    if (rel !== OWNER && rel !== AUDIT_REGISTRY && STOP_EVENT_RE.test(line)) {
       offenders.push(`${at}: stop/restart event referenced outside stop.ts: ${line.trim()}`);
     }
     if (rel !== OWNER && GUARD_DEF_RE.test(line)) {

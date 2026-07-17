@@ -18,7 +18,9 @@
     "check:dr": "node ops/check-dr-writer.mjs",
     "check:ratification": "node ops/check-ratification-writer.mjs",
     "check:stop": "node ops/check-stop-writer.mjs",
-    "verify:events": "node ops/verify-chain.mjs",
+    "check:audit": "./app/node_modules/.bin/tsx ops/check-audit-conventions.ts",
+    "audit:log": "./app/node_modules/.bin/tsx ops/verify-log.ts",
+    "verify:events": "./app/node_modules/.bin/tsx ops/verify-log.ts verify",
     "db:up": "docker compose -f ops/docker-compose.yml up -d",
     "db:down": "docker compose -f ops/docker-compose.yml down -v"
   },
@@ -27,6 +29,8 @@
     "pg": "^8.13.1"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

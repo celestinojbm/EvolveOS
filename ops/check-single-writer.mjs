@@ -20,8 +20,10 @@ const ALLOWLIST = new Set([
 ]);
 const SELF = new Set([
   "ops/check-single-writer.mjs",
-  "ops/verify-chain.mjs", // read-only
 ]);
+// The read-only audit CLI (ops/verify-log.ts) and drift guard
+// (ops/check-audit-conventions.ts) are TypeScript, not .mjs, so this scan (which
+// walks ops/*.mjs only) never sees them; they perform no `events` writes anyway.
 
 const WRITE_PATTERNS = [
   /insert\s+into\s+events\b/i,
