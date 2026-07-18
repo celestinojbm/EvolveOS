@@ -1045,6 +1045,41 @@ describe("AST emitter analysis (symbol-resolved, alias/namespace-proof)", () => 
     expect(emitters.size).toBe(0);
     expect(unresolved.length).toBe(1);
   });
+
+  // --- funnel discovery uses the SAME canonical resolver (spreads, computed
+  //     keys, parameter index / property path — not a second algorithm)
+  it("discovers a funnel defined via a static const spread", () => {
+    const { emitters, unresolved } = emit1(
+      `async function log(c: any, args: any){ const base = { event_type: args.eventType }; await appendEventTx(c, { ...base }); } export async function f(c: any){ await log(c, { eventType: "spread.funnel" }); }`,
+    );
+    expect(emitters.get("spread.funnel")).toEqual(new Set(["app/src/lib/x.ts"]));
+    expect(unresolved).toEqual([]);
+  });
+
+  it("discovers a funnel defined via a static computed key", () => {
+    const { emitters, unresolved } = emit1(
+      `const KEY = "event_type"; async function log(c: any, args: any){ await appendEventTx(c, { [KEY]: args.eventType }); } export async function f(c: any){ await log(c, { eventType: "computed.funnel" }); }`,
+    );
+    expect(emitters.get("computed.funnel")).toEqual(new Set(["app/src/lib/x.ts"]));
+    expect(unresolved).toEqual([]);
+  });
+
+  it("preserves the funnel's carrier parameter INDEX (not assumed arguments[1])", () => {
+    const { emitters, unresolved } = emit1(
+      `async function log(args: any, c: any){ await appendEventTx(c, { event_type: args.eventType }); } export async function f(client: any){ await log({ eventType: "first.argument" }, client); }`,
+    );
+    expect(emitters.get("first.argument")).toEqual(new Set(["app/src/lib/x.ts"]));
+    expect(unresolved).toEqual([]);
+  });
+
+  it.each([
+    ["a dynamic spread in the funnel definition", `async function log(c: any, args: any, dynamic: any){ await appendEventTx(c, { ...dynamic, event_type: args.eventType }); }`],
+    ["a dynamic computed key in the funnel definition", `async function log(c: any, args: any, key: string){ await appendEventTx(c, { [key]: args.eventType }); }`],
+  ])("does NOT silently register a funnel with %s (unresolved instead)", (_label, body) => {
+    const { emitters, unresolved } = emit1(body);
+    expect(emitters.size).toBe(0);
+    expect(unresolved.length).toBe(1);
+  });
 });
 
 describe("check-audit-conventions drift guard", () => {

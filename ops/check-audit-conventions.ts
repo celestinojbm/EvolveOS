@@ -149,13 +149,22 @@ function realPath(fileName: string): string {
  * map plus any unresolvable emissions. Pure over its input, so tests can drive it
  * with in-memory fixtures.
  *
- * FAIL-CLOSED: every call whose callee resolves to a real sink (appendEvent /
- * appendEventTx, incl. renamed / namespace / local-const aliases) or a real
- * funnel produces EXACTLY one outcome — a concrete event type, a `forward` (a
- * funnel/wrapper relaying a caller-provided type), or `unresolved`. There is no
- * silent fourth path: a missing/dynamic argument, a builder call, a dynamic
- * spread, a missing/duplicated/computed/dynamic `event_type`, or a
- * `.bind`/`.call`/`.apply` around a sink all become `unresolved`.
+ * ONE canonical resolver (`analyzeCall`) classifies BOTH sink calls and funnel
+ * calls, and it is ALSO what funnel discovery uses — there is no second,
+ * weaker algorithm for locating `event_type`. Every call whose callee resolves
+ * to a real sink (appendEvent/appendEventTx — renamed, namespace, or local-const
+ * aliases) or a real funnel yields exactly one outcome:
+ *
+ *   concrete { eventType } | forward { reference } | unresolved { detail }
+ *
+ * A `forward` carries its procedence — the forwarded parameter's declaring
+ * function symbol, its parameter INDEX (never assumed to be 1), and the property
+ * PATH from that parameter to the event type — so a funnel discovered from a
+ * spread/computed-key definition can still have its concrete callsites analysed.
+ * Anything the analyzer cannot resolve statically (a builder/dynamic argument, a
+ * dynamic spread, a missing/duplicated/computed-unprovable/dynamic key, a
+ * `.bind`/`.call`/`.apply` around a sink, an unresolvable forward) becomes
+ * `unresolved` — never a silent drop and never a partially-registered funnel.
  */
 export function analyzeEmitters(sources: Array<{ file: string; text: string }>): EmitterAnalysis {
   const emitters = new Map<string, Set<string>>();
@@ -165,21 +174,27 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
   const inputPaths = new Set(sources.map((s) => VROOT + s.file.replace(/\\/g, "/")));
   const sourceFiles = program.getSourceFiles().filter((sf: any) => inputPaths.has(sf.fileName));
 
+  interface ForwardReference {
+    functionSymbol: any;
+    parameterIndex: number;
+    propertyPath: string[];
+  }
   type Emission =
     | { kind: "concrete"; eventType: string }
-    | { kind: "forward" }
+    | { kind: "forward"; reference: ForwardReference }
     | { kind: "unresolved"; detail: string };
+  interface Selector {
+    argumentIndex: number;
+    propertyPath: string[];
+  }
+  const SINK_SELECTOR: Selector = { argumentIndex: 1, propertyPath: ["event_type"] };
 
   const aliased = (sym: any): any => {
     if (!sym) return sym;
     return sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym;
   };
 
-  /**
-   * Does `node` resolve to eventlog's appendEvent/appendEventTx export? Follows
-   * import/export aliases AND unambiguous local `const x = <sink-expr>` aliases
-   * (recursively, cycle-safe). Arbitrary wrapper functions are NOT sinks.
-   */
+  /** Does `node` resolve to eventlog's appendEvent(Tx) (through any alias)? */
   const resolvesToSink = (node: any, seen: Set<any>): boolean => {
     const raw = checker.getSymbolAtLocation(node);
     if (!raw) return false;
@@ -209,12 +224,6 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
     return null;
   };
 
-  const paramDeclaringFunction = (id: any): any | null => {
-    const sym = checker.getSymbolAtLocation(id);
-    const decl = sym?.valueDeclaration;
-    return decl && ts.isParameter(decl) ? decl.parent : null;
-  };
-
   const functionSymbol = (fn: any): any | undefined => {
     if (!fn) return undefined;
     if (ts.isFunctionDeclaration(fn) && fn.name) return checker.getSymbolAtLocation(fn.name);
@@ -223,7 +232,18 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
     return undefined;
   };
 
-  /** The static property name of a member, or null (computed/dynamic). */
+  /** Build a forward reference from a parameter identifier + a property suffix. */
+  const makeForwardRef = (paramId: any, suffix: string[]): Emission => {
+    const sym = checker.getSymbolAtLocation(paramId);
+    const decl = sym?.valueDeclaration;
+    if (!decl || !ts.isParameter(decl)) return { kind: "unresolved", detail: "forward root is not a parameter" };
+    const fn = decl.parent;
+    const parameterIndex = fn.parameters.indexOf(decl);
+    const fnSym = functionSymbol(fn);
+    if (!fnSym || parameterIndex < 0) return { kind: "unresolved", detail: "forwarded parameter's function is not resolvable" };
+    return { kind: "forward", reference: { functionSymbol: fnSym, parameterIndex, propertyPath: suffix } };
+  };
+
   const staticPropName = (prop: any): string | null => {
     if (ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) {
       const name = prop.name;
@@ -233,7 +253,6 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
     return null;
   };
 
-  /** Prove a computed property key to a string literal value, or null if not. */
   const resolveComputedKeyText = (expr: any): string | null => {
     const e = unwrap(expr);
     if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
@@ -241,32 +260,40 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
     return null;
   };
 
+  /** Classify the terminal value expression of the resolved event-type slot. */
   const classifyValue = (valueExpr: any): Emission => {
     const v = unwrap(valueExpr);
     if (ts.isStringLiteral(v) || ts.isNoSubstitutionTemplateLiteral(v)) return { kind: "concrete", eventType: v.text };
     if (ts.isIdentifier(v)) {
-      if (paramDeclaringFunction(v)) return { kind: "forward" };
+      const sym = checker.getSymbolAtLocation(v);
+      if (sym?.valueDeclaration && ts.isParameter(sym.valueDeclaration)) return makeForwardRef(v, []);
       const c = resolveStringConst(v);
       return c !== null ? { kind: "concrete", eventType: c } : { kind: "unresolved", detail: "event_type is a non-constant identifier" };
     }
     if (ts.isPropertyAccessExpression(v)) {
-      let root = v;
-      while (ts.isPropertyAccessExpression(root.expression)) root = root.expression;
-      if (ts.isIdentifier(root.expression) && paramDeclaringFunction(root.expression)) return { kind: "forward" };
+      const suffix: string[] = [];
+      let cur: any = v;
+      while (ts.isPropertyAccessExpression(cur)) {
+        suffix.unshift(cur.name.text);
+        cur = cur.expression;
+      }
+      if (ts.isIdentifier(cur)) {
+        const sym = checker.getSymbolAtLocation(cur);
+        if (sym?.valueDeclaration && ts.isParameter(sym.valueDeclaration)) return makeForwardRef(cur, suffix);
+      }
       return { kind: "unresolved", detail: "event_type is a non-parameter property access" };
     }
     return { kind: "unresolved", detail: "event_type is a computed/dynamic expression" };
   };
 
-  type ObjResult = { kind: "object"; node: any } | { kind: "forward" } | { kind: "unresolved"; detail: string };
-  /** Resolve a call argument to a static object literal, a forward, or unresolved. */
+  type ObjResult = { kind: "object"; node: any } | { kind: "forward"; param: any } | { kind: "unresolved"; detail: string };
   const resolveToObjectLiteral = (expr: any): ObjResult => {
     const a = unwrap(expr);
     if (ts.isObjectLiteralExpression(a)) return { kind: "object", node: a };
     if (ts.isIdentifier(a)) {
       const sym = aliased(checker.getSymbolAtLocation(a));
       const decl = sym?.valueDeclaration;
-      if (decl && ts.isParameter(decl)) return { kind: "forward" };
+      if (decl && ts.isParameter(decl)) return { kind: "forward", param: a };
       if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
         const init = unwrap(decl.initializer);
         if (ts.isObjectLiteralExpression(init)) return { kind: "object", node: init };
@@ -278,82 +305,77 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
     return { kind: "unresolved", detail: "argument is not a static object literal" };
   };
 
-  type KeyResult =
-    | { kind: "concrete"; eventType: string }
-    | { kind: "forward" }
-    | { kind: "absent" }
-    | { kind: "unresolved"; detail: string };
-  /** Resolve `key`'s value inside an object literal (static spreads merged, override semantics). */
-  const keyValueInObject = (objNode: any, key: string, depth: number): KeyResult => {
+  type NodeResult = { kind: "node"; node: any } | { kind: "absent" } | { kind: "unresolved"; detail: string };
+  /** The winning value node for `key` in an object literal (static spreads merged). */
+  const resolveKeyNode = (objNode: any, key: string, depth: number): NodeResult => {
     if (depth > 16) return { kind: "unresolved", detail: "object/spread nesting too deep" };
-    let current: KeyResult = { kind: "absent" };
+    let winner: any | undefined;
     let directCount = 0;
     for (const prop of objNode.properties) {
       if (ts.isSpreadAssignment(prop)) {
         const r = resolveToObjectLiteral(prop.expression);
-        if (r.kind !== "object") return { kind: "unresolved", detail: "dynamic or non-static spread — event_type cannot be determined" };
-        const sub = keyValueInObject(r.node, key, depth + 1);
+        if (r.kind !== "object") return { kind: "unresolved", detail: "dynamic or non-static spread — key cannot be determined" };
+        const sub = resolveKeyNode(r.node, key, depth + 1);
         if (sub.kind === "unresolved") return sub;
-        if (sub.kind !== "absent") current = sub; // spread contributes; own props may override
+        if (sub.kind === "node") winner = sub.node; // spread contributes; own props override later
         continue;
       }
       if ((ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) && prop.name && ts.isComputedPropertyName(prop.name)) {
         const proven = resolveComputedKeyText(prop.name.expression);
         if (proven === null) return { kind: "unresolved", detail: "computed property key cannot be statically proven" };
         if (proven !== key) continue;
-        const val = ts.isShorthandPropertyAssignment(prop) ? prop.name : prop.initializer;
-        const c = classifyValue(val);
-        if (c.kind === "unresolved") return c;
-        current = c;
+        winner = ts.isShorthandPropertyAssignment(prop) ? prop.name : prop.initializer;
         directCount++;
         continue;
       }
-      const name = staticPropName(prop);
-      if (name === key) {
-        const val = ts.isShorthandPropertyAssignment(prop) ? prop.name : prop.initializer;
-        const c = classifyValue(val);
-        if (c.kind === "unresolved") return c;
-        current = c;
+      if (staticPropName(prop) === key) {
+        winner = ts.isShorthandPropertyAssignment(prop) ? prop.name : prop.initializer;
         directCount++;
       }
     }
     if (directCount > 1) return { kind: "unresolved", detail: `multiple direct definitions of ${key}` };
-    return current;
+    return winner === undefined ? { kind: "absent" } : { kind: "node", node: winner };
   };
 
-  /** Every sink/funnel call yields concrete | forward | unresolved (never silent). */
-  const analyzeCall = (call: any, key: string): Emission => {
-    if (call.arguments.length < 2) return { kind: "unresolved", detail: "sink/funnel call has no event-bearing argument" };
-    const arg = call.arguments[1];
+  /** Descend a property path through nested object literals to the terminal node. */
+  const resolvePath = (objNode: any, path: string[], depth: number): NodeResult => {
+    if (path.length === 0) return { kind: "unresolved", detail: "empty property path" };
+    const [head, ...rest] = path;
+    const r = resolveKeyNode(objNode, head, depth);
+    if (r.kind !== "node") return r;
+    if (rest.length === 0) return r;
+    const sub = resolveToObjectLiteral(r.node);
+    if (sub.kind === "object") return resolvePath(sub.node, rest, depth + 1);
+    if (sub.kind === "forward") return { kind: "unresolved", detail: "intermediate path segment is a forwarded parameter" };
+    return sub;
+  };
+
+  /** THE canonical classifier — every sink/funnel call goes through here. */
+  const analyzeCall = (call: any, selector: Selector): Emission => {
+    const arg = call.arguments[selector.argumentIndex];
+    if (arg === undefined) return { kind: "unresolved", detail: `no argument at index ${selector.argumentIndex}` };
     const obj = resolveToObjectLiteral(arg);
-    if (obj.kind === "forward") return { kind: "forward" };
+    if (obj.kind === "forward") return makeForwardRef(obj.param, selector.propertyPath);
     if (obj.kind === "unresolved") return obj;
-    const kv = keyValueInObject(obj.node, key, 0);
-    if (kv.kind === "absent") return { kind: "unresolved", detail: `${key} property is absent` };
-    return kv;
+    const r = resolvePath(obj.node, selector.propertyPath, 0);
+    if (r.kind === "absent") return { kind: "unresolved", detail: `${selector.propertyPath.join(".")} is absent` };
+    if (r.kind === "unresolved") return r;
+    return classifyValue(r.node);
   };
 
-  // Pass A: detect funnel helpers by SYMBOL — a function whose body calls a sink
-  // forwarding one of its parameters' properties as the event type.
-  const funnels = new Map<any, string>(); // functionSymbol -> forwarded key
+  // Pass A: funnel discovery via the SAME canonical resolver. A sink call that
+  // resolves to a forward registers its declaring function as a funnel, keyed by
+  // symbol, with the parameter index + property path to re-resolve callsites.
+  const funnels = new Map<any, Selector>();
   for (const sf of sourceFiles) {
     const visit = (n: any): void => {
-      if (ts.isCallExpression(n) && isSinkCallee(n.expression) && n.arguments.length >= 2) {
-        const r = resolveToObjectLiteral(n.arguments[1]);
-        if (r.kind === "object") {
-          for (const prop of r.node.properties) {
-            if (staticPropName(prop) === "event_type" && ts.isPropertyAssignment(prop)) {
-              const v = unwrap(prop.initializer);
-              if (ts.isPropertyAccessExpression(v)) {
-                let root = v;
-                while (ts.isPropertyAccessExpression(root.expression)) root = root.expression;
-                if (ts.isIdentifier(root.expression)) {
-                  const sym = functionSymbol(paramDeclaringFunction(root.expression));
-                  if (sym && ts.isIdentifier(v.name)) funnels.set(sym, v.name.text);
-                }
-              }
-            }
-          }
+      if (ts.isCallExpression(n) && isSinkCallee(n.expression)) {
+        const res = analyzeCall(n, SINK_SELECTOR);
+        if (res.kind === "forward") {
+          funnels.set(res.reference.functionSymbol, {
+            argumentIndex: res.reference.parameterIndex,
+            propertyPath: res.reference.propertyPath,
+          });
         }
       }
       ts.forEachChild(n, visit);
@@ -372,19 +394,19 @@ export function analyzeEmitters(sources: Array<{ file: string; text: string }>):
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
         unresolved.push({ file, line, detail: res.detail });
       }
+      // forward: a funnel-defining / wrapper relay — not a concrete emission here.
     };
     const visit = (n: any): void => {
       if (ts.isCallExpression(n)) {
-        // .bind/.call/.apply around a sink is an unsupported indirection (fail closed).
         if (ts.isPropertyAccessExpression(n.expression) && ["bind", "call", "apply"].includes(n.expression.name.text) && resolvesToSink(n.expression.expression, new Set())) {
           const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
           unresolved.push({ file, line, detail: `unsupported ${n.expression.name.text}() indirection around a sink` });
         } else if (isSinkCallee(n.expression)) {
-          record(analyzeCall(n, "event_type"), n);
+          record(analyzeCall(n, SINK_SELECTOR), n);
         } else {
           const calleeSym = aliased(checker.getSymbolAtLocation(n.expression));
-          const funnelKey = calleeSym && funnels.get(calleeSym);
-          if (funnelKey) record(analyzeCall(n, funnelKey), n);
+          const funnelSel = calleeSym && funnels.get(calleeSym);
+          if (funnelSel) record(analyzeCall(n, funnelSel), n);
         }
       }
       ts.forEachChild(n, visit);
