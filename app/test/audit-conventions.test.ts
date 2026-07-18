@@ -1007,6 +1007,44 @@ describe("AST emitter analysis (symbol-resolved, alias/namespace-proof)", () => 
     expect(emitters.size).toBe(0);
     expect(unresolved).toEqual([]);
   });
+
+  // --- fail-closed coverage: every sink/funnel call is concrete|forward|unresolved
+  const IMPORTS = `import { appendEventTx } from "./eventlog.js"; import * as eventlog from "./eventlog.js";`;
+  const emit1 = (body: string) => analyzeEmitters([{ file: "app/src/lib/x.ts", text: `${IMPORTS}\n${body}` }]);
+
+  it("follows a local const alias of the sink (const emit = appendEventTx)", () => {
+    const { emitters } = emit1(`const emit = appendEventTx; export async function f(c: any){ await emit(c, { event_type: "aliased.local" }); }`);
+    expect(emitters.get("aliased.local")).toEqual(new Set(["app/src/lib/x.ts"]));
+  });
+
+  it("follows a local const alias from a namespace (const emit = eventlog.appendEventTx)", () => {
+    const { emitters } = emit1(`const emit = eventlog.appendEventTx; export async function f(c: any){ await emit(c, { event_type: "aliased.namespace" }); }`);
+    expect(emitters.get("aliased.namespace")).toEqual(new Set(["app/src/lib/x.ts"]));
+  });
+
+  it("recognizes a quoted event_type property", () => {
+    const { emitters } = emit1(`export async function f(c: any){ await appendEventTx(c, { "event_type": "quoted.event" }); }`);
+    expect(emitters.get("quoted.event")).toEqual(new Set(["app/src/lib/x.ts"]));
+  });
+
+  it("merges a static const spread deterministically", () => {
+    const { emitters, unresolved } = emit1(`const base = { event_type: "spread.static" }; export async function f(c: any){ await appendEventTx(c, { ...base }); }`);
+    expect(emitters.get("spread.static")).toEqual(new Set(["app/src/lib/x.ts"]));
+    expect(unresolved).toEqual([]);
+  });
+
+  it.each([
+    ["a builder call argument", `function buildEvent(){ return { event_type: "x" } as any; } export async function f(c: any){ await appendEventTx(c, buildEvent()); }`],
+    ["a dynamic variable argument", `function makeInput(){ return {} as any; } export async function f(c: any){ const input = makeInput(); await appendEventTx(c, input); }`],
+    ["a dynamic spread", `export async function f(c: any, input: any){ await appendEventTx(c, { ...input }); }`],
+    ["a missing event_type", `export async function f(c: any){ await appendEventTx(c, { actor_type: "human" }); }`],
+    ["a duplicated event_type", `export async function f(c: any){ await appendEventTx(c, { event_type: "a", event_type: "b" } as any); }`],
+    ["a .bind() indirection around the sink", `export async function f(c: any){ await appendEventTx.bind(null)(c, { event_type: "bound.evt" }); }`],
+  ])("fails closed (unresolved, no silent drop) on %s", (_label, body) => {
+    const { emitters, unresolved } = emit1(body);
+    expect(emitters.size).toBe(0);
+    expect(unresolved.length).toBe(1);
+  });
 });
 
 describe("check-audit-conventions drift guard", () => {
