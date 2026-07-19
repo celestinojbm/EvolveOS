@@ -45,6 +45,8 @@ This is a deliberate strengthening of the issue's `H(prev_hash ‖ canonical(pay
 - `verifyChainRecords(events[])` — pure verification of an ordered dump: checks each link and re-computes each hash. Returns `{ ok, brokenAt?, reason? }`.
 - `verifyChainInDb(client)` — reads the whole table in `seq` order and verifies it (also checks `seq` is strictly increasing).
 
+The operator CLI [`ops/verify-log.ts`](../ops/verify-log.ts) (issue [#13](https://github.com/celestinojbm/EvolveOS/issues/13)) builds on these: `pnpm verify:events` re-verifies the whole chain **and** every event-type convention, and `pnpm audit:log -- extract …` produces a human audit extract for a date range or venture. It reuses `computeHash`/`canonicalize` from here (no second hashing authority) and the taxonomy in [`docs/AUDIT_CONVENTIONS.md`](AUDIT_CONVENTIONS.md).
+
 `ops/check-single-writer.mjs` (CI) fails the build if any source file outside `eventlog.ts` contains a direct `INSERT/UPDATE/DELETE` on `events`.
 
 ## Append-only enforcement
@@ -67,10 +69,9 @@ Enforced by the **database**, not by convention. `0002_events.sql` installs `BEF
 
 ```bash
 pnpm migrate          # apply ops/migrations/*.sql (creates events + triggers) to $DATABASE_URL
-pnpm build            # compile the app (needed before verify:events)
 pnpm test             # vitest: hashing/tamper (pure) + append/triggers (Postgres)
 pnpm check:eventlog   # CI guard: no event writes outside eventlog.ts
-pnpm verify:events    # verify the live chain in $DATABASE_URL (exit 1 if broken)
+pnpm verify:events    # verify the live chain + conventions in $DATABASE_URL (exit 1 if broken); runs via tsx, no build needed
 ```
 
 `DATABASE_URL` defaults to `postgres://postgres:postgres@localhost:5432/evolveos` (start it with `pnpm db:up`) — a throwaway local-dev value, not a secret.

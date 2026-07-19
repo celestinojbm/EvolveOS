@@ -68,14 +68,24 @@ jobs:
       - name: G-00 stop mechanism has a single owner (no stop bypass)
         run: pnpm check:stop
 
+      - name: Audit conventions, productive writers, and docs agree (no drift)
+        run: pnpm check:audit
+
       - name: Migrations apply to a clean DB
         run: pnpm migrate
 
       - name: Migrations are idempotent (no-op on second run)
         run: pnpm migrate
 
-      - name: Typecheck + tests (generated type, event log, append-only triggers)
-        run: pnpm test
-
-      - name: Verify the event-log hash chain
+      # Smoke-test the audit CLI end-to-end against the freshly-migrated database
+      # BEFORE the tests run: `verify` now checks the hash chain AND every event
+      # convention, and the test suite deliberately seeds non-conforming fixtures
+      # (bad digests, unknown `unit.*` types) into this shared DB to exercise the
+      # other modules' validators. Verifying here confirms the CLI connects, reads,
+      # and validates a clean chain; the rich verify/tamper/extract coverage lives
+      # in app/test/audit-conventions.test.ts (isolated per-test databases).
+      - name: Verify the event-log chain + conventions (clean DB)
         run: pnpm verify:events
+
+      - name: Typecheck + tests (generated type, event log, append-only triggers, audit CLI)
+        run: pnpm test

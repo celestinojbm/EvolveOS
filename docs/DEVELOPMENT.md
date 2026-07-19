@@ -36,6 +36,10 @@ pnpm dev                # run the skeleton service (GET http://localhost:3000/he
 pnpm db:up              # start local Postgres (docker compose)
 pnpm migrate            # apply ops/migrations/*.sql to $DATABASE_URL (idempotent)
 pnpm db:down            # stop and remove the local Postgres volume
+
+pnpm check:audit        # CI guard: event registry ⇄ productive writers ⇄ docs (issue #13)
+pnpm verify:events      # verify the live chain + every event convention (tsx, no build)
+pnpm audit:log -- extract --venture V-2026-1   # human audit extract for a venture / date range
 ```
 
 `DATABASE_URL` defaults to `postgres://postgres:postgres@localhost:5432/evolveos` — a **throwaway local-dev value**, not a secret and never used in any deployed environment.
@@ -46,7 +50,7 @@ pnpm db:down            # stop and remove the local Postgres volume
 
 ## CI
 
-`.github/workflows/app-ci.yml` runs on every push/PR: install → typegen → build → test → migrate (twice, to prove idempotency) against a Postgres service container. It is separate from `spec-consistency.yml`, which stays standard-library-Python only.
+`.github/workflows/app-ci.yml` runs on every push/PR: install → typegen → build → the single-writer / drift guards (`check:eventlog`, `check:gates`, `check:dr`, `check:ratification`, `check:stop`, `check:audit`) → migrate (twice, to prove idempotency) → `verify:events` on the clean chain → test, all against a Postgres service container. It is separate from `spec-consistency.yml`, which stays standard-library-Python only.
 
 ## Out of scope (deliberate)
 

@@ -1,0 +1,6 @@
+{
+  "name": "@evolveos/ops",
+  "private": true,
+  "type": "module",
+  "description": "EvolveOS operator tooling (migrations, CI guards, the event-log audit CLI). Not a workspace package; ESM so the TypeScript CLIs (verify-log.ts, check-audit-conventions.ts) resolve as modules under tsc (NodeNext) and tsx."
+}
